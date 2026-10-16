@@ -200,7 +200,10 @@ emote = "none",
 emoteSpeed = 0.6,
 emoteIds = { cheer = 129423030, wave = 128777973, point = 128853357 },
 reloadAll = true,
-noRecoil = true,
+noRecoil = (function()
+local ok, name = pcall(function() return identifyexecutor and identifyexecutor() or "" end)
+return ok and type(name) == "string" and name:lower():find("real", 1, true) ~= nil
+end)(),
 checkEvery = 0.5,
 }
 local enabled = true
@@ -312,21 +315,18 @@ obj.Update = function() end
 return obj
 end
 local function patchTool(tool)
-if not tool:IsA("Tool") then return end
+if not CFG.noRecoil or not tool:IsA("Tool") then return end
 task.spawn(function()
 local gl = tool:WaitForChild("GunLocal", 5)
 local mod = gl and gl:WaitForChild("Recoil", 5)
 if not mod or not mod:IsA("ModuleScript") then return end
 local ok, m = pcall(require, mod)
-if ok and type(m) == "table" and type(m.new) == "function" and not patchedRecoil[m] then
+if ok and type(m) == "table" and type(m.new) == "function" and not patchedRecoil[m] and CFG.noRecoil then
 local orig = m.new
 patchedRecoil[m] = orig
 m.new = function(...)
 local obj = orig(...)
-if CFG.noRecoil then
-local okCalm = pcall(calmRecoil, obj)
-if not okCalm then return obj end
-end
+if CFG.noRecoil then pcall(calmRecoil, obj) end
 return obj
 end
 end
@@ -343,6 +343,19 @@ connect(lp.CharacterAdded, function(c)
 watchForRecoil(c)
 watchForRecoil(lp:WaitForChild("Backpack"))
 end)
+local function setNoRecoil(on)
+CFG.noRecoil = on and true or false
+if CFG.noRecoil then
+for _, container in ipairs({ lp:FindFirstChild("Backpack"), lp.Character }) do
+if container then
+for _, t in ipairs(container:GetChildren()) do patchTool(t) end
+end
+end
+else
+for m, orig in pairs(patchedRecoil) do m.new = orig end
+table.clear(patchedRecoil)
+end
+end
 local reloadConn = nil
 local reloadWatching = nil
 local reloadBusyUntil = 0
@@ -411,6 +424,7 @@ setEmote = function(name) CFG.emote = name stopEmote() end,
 setAim = function(mode) CFG.aimMode = mode end,
 held = function() return userHeld end,
 isOn = function() return enabled end,
+setNoRecoil = setNoRecoil,
 stop = function()
 for _, c in ipairs(conns) do c:Disconnect() end
 table.clear(conns)
@@ -865,6 +879,8 @@ local mode = "walk"
 local reverts = 0
 local lastSet = nil
 local unlockedFor = nil
+local preFireBound = false
+local bindPreFire -- assigned below, after the click handler exists
 local function unlock(hum)
 if not hum or unlockedFor == hum or not getconnections then return end
 unlockedFor = hum
@@ -884,6 +900,7 @@ end
 local function setEnabled(on)
 if on == CFG.enabled then return end
 CFG.enabled = on
+bindPreFire(on)
 local hum = humanoid()
 if on then
 mode = "walk"
@@ -913,9 +930,17 @@ lastShot = os.clock()
 end
 return Enum.ContextActionResult.Pass
 end
+bindPreFire = function(on)
+if on == preFireBound then return end
+preFireBound = on
 pcall(function()
+if on then
 CAS:BindActionAtPriority("BabylonPreFire", preFire, false, 3000, Enum.UserInputType.MouseButton1)
+else
+CAS:UnbindAction("BabylonPreFire")
+end
 end)
+end
 table.insert(conns, track.InputBegan:Connect(function(input)
 if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 dragging = true
@@ -1822,8 +1847,8 @@ addSlider(gate, "Wall height", 2, 10, 0.5, function() local g = api("FloatGuns")
 addSlider(gate, "Held gun height", 2, 8, 0.5, function() local g = api("FloatGuns") return g and g.cfg.heldHeight or 4.4 end, function(v) local g = api("FloatGuns") if g then g.cfg.heldHeight = v end end)
 addSlider(gate, "Guns per row", 2, 12, 1, function() local g = api("FloatGuns") return g and g.cfg.gunsPerRow or 6 end, function(v) local g = api("FloatGuns") if g then g.cfg.gunsPerRow = v end end)
 addToggle(gate, "Reload all guns together", function() local g = api("FloatGuns") return g and g.cfg.reloadAll end, function(v) local g = api("FloatGuns") if g then g.cfg.reloadAll = v end end)
-addToggle(gate, "No camera recoil (screen shake)", function() local g = api("FloatGuns") return g and g.cfg.noRecoil end, function(v) local g = api("FloatGuns") if g then g.cfg.noRecoil = v end end)
-infoLabel(gate, "Applies the next time you equip a gun. If a gun ever will not fire, turn this off and re-equip it.", 46)
+addToggle(gate, "No camera recoil (screen shake)", function() local g = api("FloatGuns") return g and g.cfg.noRecoil end, function(v) local g = api("FloatGuns") if g then g.setNoRecoil(v) end end)
+infoLabel(gate, "Takes effect when you equip a gun. On other executors than Real it starts OFF; if you turn it on and a gun will not fire, turn it off again and re-equip the gun.", 58)
 local items = newTab("Items")
 addButton(items, "Open shop", function() local o = api("OpenShop") if o then o.run() end end)
 addKeybind(items, "Shop key", function() local o = api("OpenShop") return o and o.cfg.key or Enum.KeyCode.P end, function(k) local o = api("OpenShop") if o then o.cfg.key = k end end)
