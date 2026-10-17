@@ -976,6 +976,1214 @@ end
 if moved then g.C0 = newC0 end
 end
 end)
+
+local SoundService = game:GetService("SoundService")
+
+CFG.fx = true             -- master switch for everything below
+CFG.portals = true        -- golden portals on the guns
+CFG.hideGuns = true       -- hide the gun models on your screen only
+CFG.swords = true         -- swords / spears fly out of the portals on every shot
+CFG.muteGunSounds = true  -- silence the guns' own sounds while the gate is open
+CFG.fallbackFire = true   -- also show swords when you hold the mouse button, even if the shot itself was not detected
+CFG.portalSize = 3.0
+CFG.themeVolume = 0.6
+CFG.humVolume = 0.35
+CFG.shotVolume = 0.8
+CFG.themeFile = "gate_theme"
+CFG.shotFile = "gate_shot"
+CFG.shotMaxLen = 1.4
+CFG.swordSpeed = 340
+CFG.swordRange = 450
+CFG.maxSwords = 110
+CFG.watchRange = 400      -- how far away (studs) other players' gates are drawn
+CFG.watchOthers = true    -- see the portals and swords of other players who run this script (they must have 2+ guns out)
+
+local GOLD = Color3.fromRGB(226, 126, 12)
+local GOLD_HI = Color3.fromRGB(255, 182, 58)
+local GOLD_DK = Color3.fromRGB(150, 90, 10)
+local fxConns = {}
+local function fxConnect(signal, fn)
+local c = signal:Connect(fn)
+table.insert(fxConns, c)
+return c
+end
+
+local fxFolder = nil
+local function folder()
+if fxFolder and fxFolder.Parent then return fxFolder end
+fxFolder = Instance.new("Folder")
+fxFolder.Name = "GateOfBabylonFX"
+fxFolder.Parent = workspace
+return fxFolder
+end
+
+local function mkPart(kind, size, color, transp, material)
+local p = Instance.new(kind == "wedge" and "WedgePart" or "Part")
+p.Anchored = true
+p.CanCollide = false
+p.CanQuery = false
+p.CanTouch = false
+p.CastShadow = false
+p.Massless = true
+if kind == "cyl" then p.Shape = Enum.PartType.Cylinder
+elseif kind == "ball" then p.Shape = Enum.PartType.Ball end
+p.Material = material or Enum.Material.Neon
+p.Color = color
+p.Transparency = transp or 0
+p.Size = size
+p.Parent = folder()
+return p
+end
+
+local audioTry, audioId = {}, {}
+local function audioAsset(base, default)
+if audioId[base] then return audioId[base] end
+if audioTry[base] and os.clock() - audioTry[base] < 4 then return nil end
+audioTry[base] = os.clock()
+local id
+pcall(function()
+if not (isfile and getcustomasset) then return end
+for _, ext in ipairs({ ".mp3", ".ogg", ".wav" }) do
+if isfile(base .. ext) then id = getcustomasset(base .. ext) return end
+end
+if default and isfile(default) then id = getcustomasset(default) end
+end)
+audioId[base] = id
+return id
+end
+
+CFG.autoDownload = true
+CFG.soundBase = "https://raw.githubusercontent.com/Turdeater/Killswitch/main/"
+local SOUND_FILES = { "gate_theme.mp3", "gate_shot.mp3", "gate_hum.wav", "gate_open.wav" }
+local function fetchSounds(list)
+if not (isfile and writefile and getcustomasset) then return end
+local got = 0
+for _, name in ipairs(list or SOUND_FILES) do
+local have = false
+pcall(function() have = isfile(name) end)
+if not have then
+local ok, data = pcall(function() return game:HttpGet(CFG.soundBase .. name) end)
+if ok and type(data) == "string" and #data > 2000 and data:sub(1, 3) ~= "404" then
+if pcall(writefile, name, data) then
+got += 1
+print("[Babylon] downloaded " .. name)
+end
+else
+print("[Babylon] could not download " .. name .. " (is it uploaded to the repo?)")
+end
+end
+end
+table.clear(audioId)
+table.clear(audioTry)
+return got
+end
+
+local function newSound(id, vol, looped, parent)
+local s = Instance.new("Sound")
+s.SoundId = id
+s.Volume = vol
+s.Looped = looped and true or false
+s.Parent = parent or SoundService
+return s
+end
+
+local liveShots = 0
+local function playShot(parent, mul)
+if CFG.shotVolume <= 0 then return end
+local id = audioAsset(CFG.shotFile, "gate_shot_default.wav")
+if not id or liveShots >= 24 then return end
+local s = newSound(id, CFG.shotVolume * (mul or 1), false, parent)
+if parent then
+s.RollOffMinDistance = 14
+s.RollOffMaxDistance = 150
+end
+s.PlaybackSpeed = 0.94 + math.random() * 0.14
+liveShots += 1
+local done = false
+local function fin()
+if done then return end
+done = true
+liveShots -= 1
+pcall(function() s:Destroy() end)
+end
+s.Ended:Connect(fin)
+task.delay(CFG.shotMaxLen, fin)
+s:Play()
+end
+
+local theme = { snd = nil, fade = 0 }
+local hum = { snd = nil, part = nil, fade = 0 }
+local wasWanted = false
+local noThemeNote = false
+
+local function destroyAudio()
+if theme.snd then pcall(function() theme.snd:Destroy() end) theme.snd = nil end
+if hum.snd then pcall(function() hum.snd:Destroy() end) hum.snd = nil end
+if hum.part then pcall(function() hum.part:Destroy() end) hum.part = nil end
+theme.fade, hum.fade = 0, 0
+end
+
+local function audioStep(dt, want, center)
+if want and not wasWanted then
+local id = audioAsset("gate_open", "gate_open.wav")
+if id then
+local s = newSound(id, math.clamp(CFG.humVolume * 2.2, 0, 10), false)
+s.Ended:Connect(function() pcall(function() s:Destroy() end) end)
+task.delay(6, function() pcall(function() s:Destroy() end) end)
+s:Play()
+end
+end
+wasWanted = want
+local step = (want and 1 / 1.6 or -1 / 1.1) * dt
+theme.fade = math.clamp(theme.fade + step, 0, 1)
+if want and not theme.snd then
+local id = audioAsset(CFG.themeFile, "gate_theme_default.wav")
+if id then
+theme.snd = newSound(id, 0, true)
+theme.snd:Play()
+elseif not noThemeNote then
+noThemeNote = true
+print("[Babylon] Gate music: put gate_theme.mp3 in the executor's workspace folder")
+end
+end
+if theme.snd then
+theme.snd.Volume = CFG.themeVolume * theme.fade
+if theme.fade <= 0 and not want then
+pcall(function() theme.snd:Destroy() end)
+theme.snd = nil
+end
+end
+hum.fade = math.clamp(hum.fade + step, 0, 1)
+if want and not hum.snd then
+local id = audioAsset("gate_hum", "gate_hum.wav")
+if id then
+hum.part = Instance.new("Part")
+hum.part.Anchored = true
+hum.part.CanCollide = false
+hum.part.CanQuery = false
+hum.part.CanTouch = false
+hum.part.Transparency = 1
+hum.part.Size = Vector3.new(1, 1, 1)
+hum.part.Parent = folder()
+hum.snd = newSound(id, 0, true, hum.part)
+hum.snd.RollOffMinDistance = 18
+hum.snd.RollOffMaxDistance = 160
+hum.snd:Play()
+end
+end
+if hum.snd then
+hum.snd.Volume = CFG.humVolume * hum.fade
+if center and hum.part then hum.part.Position = center end
+if hum.fade <= 0 and not want then
+pcall(function() hum.snd:Destroy() end)
+pcall(function() hum.part:Destroy() end)
+hum.snd, hum.part = nil, nil
+end
+end
+end
+
+local watched = setmetatable({}, { __mode = "k" })
+local gunSounds = {} -- { snd = Sound, vol = original volume }
+local soundInfo = setmetatable({}, { __mode = "k" })
+local muted = false
+local lastShot = setmetatable({}, { __mode = "k" })
+local lastShotAny = 0
+local mouseUpAt = 0
+local mouseWasDown = false
+local fireTool -- defined with the portals below
+local debugOn = false
+
+local function dbg(...)
+if debugOn then print("[GateFX]", ...) end
+end
+
+local attrWorks = setmetatable({}, { __mode = "k" })
+local function onShot(tool, why)
+local now = os.clock()
+if why:sub(1, 4) == "attr" or why:sub(1, 4) == "ammo" then attrWorks[tool] = true
+elseif attrWorks[tool] then return end -- the gun's ammo counter is reliable, ignore sound guesses
+if lastShot[tool] and now - lastShot[tool] < 0.05 then return end
+lastShot[tool] = now
+lastShotAny = now
+dbg("shot", tool.Name, why)
+if fireTool then fireTool(tool) end
+end
+
+local function mouseRecent()
+return UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) or os.clock() - mouseUpAt < 0.7
+end
+
+local SKIP = { "reload", "equip", "unsheath", "draw", "empty", "click", "pickup", "cock", "mag" }
+local function looksLikeShot(name)
+name = name:lower()
+for _, w in ipairs(SKIP) do
+if name:find(w, 1, true) then return false end
+end
+return true
+end
+
+local function hookSound(tool, snd)
+if soundInfo[snd] then return end
+local info = { snd = snd, vol = snd.Volume }
+soundInfo[snd] = info
+table.insert(gunSounds, info)
+if muted then snd.Volume = 0 end
+fxConnect(snd.Played, function()
+if looksLikeShot(snd.Name) and mouseRecent() then onShot(tool, "sound " .. snd.Name) end
+end)
+fxConnect(snd:GetPropertyChangedSignal("Playing"), function()
+if snd.Playing and looksLikeShot(snd.Name) and mouseRecent() then onShot(tool, "playing " .. snd.Name) end
+end)
+fxConnect(snd:GetPropertyChangedSignal("Volume"), function()
+if muted and snd.Volume ~= 0 then
+info.vol = snd.Volume
+snd.Volume = 0
+elseif not muted then
+info.vol = snd.Volume
+end
+end)
+end
+
+local function hookAttrs(tool)
+local last = {}
+for name, v in pairs(tool:GetAttributes()) do
+if type(v) == "number" then last[name] = v end
+end
+fxConnect(tool.AttributeChanged, function(name)
+local n = name:lower()
+local v = tool:GetAttribute(name)
+if n:find("fire", 1, true) or n:find("shot", 1, true) or n:find("shoot", 1, true) then
+if not n:find("rate", 1, true) and not n:find("mode", 1, true) then onShot(tool, "attr " .. name) end
+elseif (n:find("ammo", 1, true) or n:find("mag", 1, true) or n:find("bullet", 1, true) or n:find("clip", 1, true)) and type(v) == "number" then
+if last[name] and v < last[name] then onShot(tool, "ammo " .. name) end
+last[name] = v
+end
+end)
+end
+
+local function watchTool(tool)
+if watched[tool] then return end
+watched[tool] = true
+for _, d in ipairs(tool:GetDescendants()) do
+if d:IsA("Sound") then hookSound(tool, d) end
+end
+fxConnect(tool.DescendantAdded, function(d)
+if d:IsA("Sound") then hookSound(tool, d) end
+end)
+hookAttrs(tool)
+end
+
+local function applyMute(on)
+muted = on
+for i = #gunSounds, 1, -1 do
+local info = gunSounds[i]
+if info.snd.Parent == nil and not info.snd:IsDescendantOf(game) then
+table.remove(gunSounds, i)
+elseif on then
+info.vol = info.snd.Volume ~= 0 and info.snd.Volume or info.vol
+info.snd.Volume = 0
+else
+info.snd.Volume = info.vol
+end
+end
+end
+
+local portals, portalCount, portalOrder = {}, 0, 0
+local pulses = {}
+local swords = {}
+local trailCount = 0
+local cfParts, cfValues = {}, {}
+
+local function addCF(part, cf)
+local n = #cfParts + 1
+cfParts[n] = part
+cfValues[n] = cf
+end
+
+local function lod(n)
+if n <= 6 then return 22, 8, true, 14
+elseif n <= 14 then return 14, 6, false, 6
+else return 9, 0, false, 0 end
+end
+
+local function newPortal(tool, n)
+portalOrder += 1
+local segN, tickN, star, rate = lod(n)
+local P = {
+tool = tool, id = portalOrder, born = os.clock() + math.min(portalOrder % 14, 13) * 0.035,
+closing = false, closedAt = 0, kick = 0, pulseAt = os.clock() + math.random() * 1.3,
+pos = Vector3.zero, dir = Vector3.new(0, 0, -1), scale = 0, ringA = {}, ringB = {}, ticks = {}, starA = {},
+}
+P.core = mkPart("cyl", Vector3.new(0.1, 1, 1), GOLD, 0.22)
+P.halo = mkPart("cyl", Vector3.new(0.06, 1, 1), GOLD, 0.84)
+for i = 1, segN do P.ringA[i] = mkPart("block", Vector3.new(0.4, 0.07, 0.07), GOLD_HI, 0) end
+for i = 1, math.max(6, math.floor(segN * 0.75)) do P.ringB[i] = mkPart("block", Vector3.new(0.4, 0.12, 0.12), GOLD, 0.1) end
+for i = 1, tickN do P.ticks[i] = mkPart("block", Vector3.new(0.4, 0.08, 0.08), GOLD, 0.05) end
+if star then
+for i = 1, 8 do P.starA[i] = mkPart("block", Vector3.new(0.4, 0.06, 0.06), GOLD_HI, 0.1) end
+end
+if rate > 0 then
+local e = Instance.new("ParticleEmitter")
+e.Rate = rate
+e.Lifetime = NumberRange.new(0.5, 1.2)
+e.Speed = NumberRange.new(1, 4)
+e.SpreadAngle = Vector2.new(180, 180)
+e.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.28), NumberSequenceKeypoint.new(1, 0) })
+e.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) })
+e.Color = ColorSequence.new(GOLD_HI, GOLD)
+e.LightEmission = 1
+e.Acceleration = Vector3.new(0, 2.5, 0)
+e.Drag = 1
+pcall(function() e.Shape = Enum.ParticleEmitterShape.Disc e.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume end)
+e.Parent = P.core
+P.emitter = e
+end
+if n <= 8 then
+local l = Instance.new("PointLight")
+l.Color = GOLD
+l.Range = 14
+l.Brightness = 0.8
+l.Parent = P.core
+P.light = l
+end
+return P
+end
+
+local function destroyPortal(P)
+pcall(function() P.core:Destroy() end)
+pcall(function() P.halo:Destroy() end)
+for _, group in ipairs({ P.ringA, P.ringB, P.ticks, P.starA }) do
+for _, p in ipairs(group) do pcall(function() p:Destroy() end) end
+end
+end
+
+local function backOut(a)
+a = a - 1
+return 1 + 2.70158 * a * a * a + 1.70158 * a * a
+end
+
+local function placeRing(group, F, R, theta, thick, dashed, count)
+local n = #group
+local spacing = 2 * math.pi * R / n
+local len = spacing * (dashed and 0.6 or 1.08)
+for i, p in ipairs(group) do
+local a = theta + (i - 1) * 2 * math.pi / n
+p.Size = Vector3.new(len, thick, thick)
+addCF(p, F * CFrame.new(math.cos(a) * R, math.sin(a) * R, -0.02) * CFrame.Angles(0, 0, a + math.pi / 2))
+end
+end
+
+local function updatePortal(P, now)
+local open
+if P.closing then
+open = 1 - math.clamp((now - P.closedAt) / 0.3, 0, 1)
+P.scale = open * open
+else
+local a = math.clamp((now - P.born) / 0.5, 0, 1)
+P.scale = a <= 0 and 0 or backOut(a)
+open = a
+end
+P.kick = math.max(0, P.kick - (1 / 0.22) * (1 / 60))
+local s = math.max(P.scale, 0.001)
+local D = CFG.portalSize * s * (1 + 0.035 * math.sin(now * 7 + P.id)) * (1 + 0.3 * P.kick)
+local F = CFrame.lookAt(P.pos, P.pos + P.dir)
+local disc = CFrame.Angles(0, math.pi / 2, 0)
+P.core.Size = Vector3.new(0.1, D, D)
+P.core.Transparency = 0.22 - 0.14 * P.kick
+addCF(P.core, F * disc)
+P.halo.Size = Vector3.new(0.06, D * 1.3, D * 1.3)
+P.halo.Transparency = 0.84 - 0.2 * P.kick
+addCF(P.halo, F * CFrame.new(0, 0, 0.05) * disc)
+local th = now * 0.85 + P.id
+placeRing(P.ringA, F, D * 0.53, th * 0.6, 0.07, false)
+placeRing(P.ringB, F, D * 0.74, -th, 0.12, true)
+local nt = #P.ticks
+for i, p in ipairs(P.ticks) do
+local a = th * 0.9 + (i - 1) * 2 * math.pi / nt
+local r = D * 0.34
+p.Size = Vector3.new(D * 0.2, 0.07, 0.07)
+addCF(p, F * CFrame.new(math.cos(a) * r, math.sin(a) * r, -0.02) * CFrame.Angles(0, 0, a))
+end
+if #P.starA == 8 then
+local R = D * 0.3
+for sq = 0, 1 do
+local rot = -th * 0.5 + sq * math.pi / 4
+for k = 0, 3 do
+local p = P.starA[sq * 4 + k + 1]
+local a = rot + k * math.pi / 2
+local apo = R * 0.707
+p.Size = Vector3.new(R * 1.414, 0.06, 0.06)
+addCF(p, F * CFrame.new(math.cos(a) * apo, math.sin(a) * apo, -0.03) * CFrame.Angles(0, 0, a + math.pi / 2))
+end
+end
+end
+if P.light then P.light.Brightness = (0.7 + 1.5 * P.kick) * open end
+if not P.closing and open >= 1 and now >= P.pulseAt and #pulses < 40 then
+P.pulseAt = now + 1.25 + math.random() * 0.7
+local pp = mkPart("cyl", Vector3.new(0.05, D, D), GOLD, 0.5)
+table.insert(pulses, { part = pp, born = now, life = 1.1, pos = P.pos, dir = P.dir, base = CFG.portalSize })
+end
+end
+
+local function addWeapon(def, list, root, sc)
+for _, d in ipairs(def) do
+local p = mkPart(d.kind, d.size * sc, d.color, d.transp or 0, d.mat)
+table.insert(list, { part = p, off = CFrame.new(d.off * sc) * (d.rot or CFrame.new()) })
+end
+end
+
+local SWORD = {
+{ kind = "block", size = Vector3.new(0.34, 0.07, 3.2), off = Vector3.new(0, 0, -2.7), color = GOLD_HI },
+{ kind = "wedge", size = Vector3.new(0.07, 0.34, 0.9), off = Vector3.new(0, 0, -4.75), color = GOLD_HI, rot = CFrame.new() },
+{ kind = "block", size = Vector3.new(1.2, 0.16, 0.22), off = Vector3.new(0, 0, -1.05), color = GOLD },
+{ kind = "block", size = Vector3.new(0.16, 0.16, 1.0), off = Vector3.new(0, 0, -0.5), color = GOLD_DK },
+{ kind = "ball", size = Vector3.new(0.32, 0.32, 0.32), off = Vector3.new(0, 0, 0.05), color = GOLD },
+{ kind = "block", size = Vector3.new(0.9, 0.9, 5.4), off = Vector3.new(0, 0, -2.9), color = GOLD, transp = 0.94 },
+}
+local SPEAR = {
+{ kind = "block", size = Vector3.new(0.13, 0.13, 5.4), off = Vector3.new(0, 0, -2.7), color = GOLD_DK, mat = Enum.Material.Metal },
+{ kind = "block", size = Vector3.new(0.5, 0.07, 1.3), off = Vector3.new(0, 0, -5.9), color = GOLD_HI },
+{ kind = "wedge", size = Vector3.new(0.07, 0.5, 0.9), off = Vector3.new(0, 0, -6.95), color = GOLD_HI },
+{ kind = "block", size = Vector3.new(0.3, 0.3, 0.3), off = Vector3.new(0, 0, -5.2), color = GOLD },
+{ kind = "block", size = Vector3.new(0.9, 0.9, 7.2), off = Vector3.new(0, 0, -3.6), color = GOLD, transp = 0.94 },
+}
+
+local UPISH = Vector3.new(0.0001, 1, 0).Unit
+local impactEmitters = {}
+local function impact(pos, normal, scale)
+local p = mkPart("ball", Vector3.new(0.6, 0.6, 0.6) * scale, GOLD_HI, 0.1)
+p.Position = pos
+table.insert(pulses, { part = p, born = os.clock(), life = 0.4, pos = pos, ball = true, base = 0.6 * scale })
+local holder = Instance.new("Part")
+holder.Anchored = true holder.CanCollide = false holder.CanQuery = false holder.Transparency = 1
+holder.Size = Vector3.new(0.2, 0.2, 0.2)
+holder.Position = pos
+holder.Parent = folder()
+local e = Instance.new("ParticleEmitter")
+e.Rate = 0
+e.Lifetime = NumberRange.new(0.3, 0.8)
+e.Speed = NumberRange.new(10, 26)
+e.SpreadAngle = Vector2.new(70, 70)
+e.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.5), NumberSequenceKeypoint.new(1, 0) })
+e.Color = ColorSequence.new(GOLD_HI, GOLD)
+e.LightEmission = 1
+e.Acceleration = Vector3.new(0, -30, 0)
+e.EmissionDirection = Enum.NormalId.Top
+e.Parent = holder
+holder.CFrame = CFrame.lookAt(pos, pos + (normal or Vector3.yAxis)) * CFrame.Angles(-math.pi / 2, 0, 0)
+e:Emit(34)
+local ringDir = normal and normal.Magnitude > 0.1 and normal.Unit or UPISH
+if math.abs(ringDir.Y) > 0.999 then ringDir = UPISH end
+table.insert(pulses, { part = mkPart("cyl", Vector3.new(0.05, 2 * scale, 2 * scale), GOLD, 0.35), born = os.clock(), life = 0.55, pos = pos + ringDir * 0.1, dir = ringDir, base = 2 * scale, grow = 6, t0 = 0.35 })
+local fl = Instance.new("PointLight")
+fl.Color = GOLD
+fl.Range = 18
+fl.Brightness = 3
+fl.Parent = holder
+TweenService:Create(fl, TweenInfo.new(0.35), { Brightness = 0 }):Play()
+task.delay(1.2, function() pcall(function() holder:Destroy() end) end)
+end
+
+local function spawnSword(P)
+if #swords >= CFG.maxSwords then return end
+local spear = math.random() < 0.3
+local def = spear and SPEAR or SWORD
+local sc = spear and (0.9 + math.random() * 0.4) or (0.8 + math.random() * 0.6)
+local W = { parts = {}, spear = spear, sc = sc, dir = P.dir, born = os.clock(), state = "emerge", len = (spear and 7.4 or 5.2) * sc }
+local jitter = CFrame.Angles((math.random() - 0.5) * 0.05, (math.random() - 0.5) * 0.05, 0)
+W.dir = (CFrame.lookAt(Vector3.zero, P.dir) * jitter).LookVector
+W.start = P.pos - W.dir * (W.len + 0.3) -- fully behind the portal to begin with
+W.cf = CFrame.lookAt(W.start, W.start + W.dir) * CFrame.Angles(0, 0, math.random() * math.pi * 2)
+W.roll = math.random() * math.pi * 2
+addWeapon(def, W.parts, W.cf, sc)
+if trailCount < 60 and W.parts[1] then
+local blade = W.parts[1].part
+local a0, a1 = Instance.new("Attachment"), Instance.new("Attachment")
+a0.Position = Vector3.new(0, 0.5 * sc, 0)
+a1.Position = Vector3.new(0, -0.5 * sc, 0)
+a0.Parent, a1.Parent = blade, blade
+local tr = Instance.new("Trail")
+tr.Attachment0, tr.Attachment1 = a0, a1
+tr.Lifetime = 0.22
+tr.LightEmission = 1
+tr.Color = ColorSequence.new(GOLD_HI, GOLD)
+tr.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
+tr.MinLength = 0.05
+tr.Parent = blade
+W.trail = tr
+trailCount += 1
+end
+W.pos = W.start
+W.tip = W.start + W.dir * W.len
+table.insert(swords, W)
+end
+
+local function killSword(W)
+for _, e in ipairs(W.parts) do pcall(function() e.part:Destroy() end) end
+if W.trail then trailCount = math.max(0, trailCount - 1) end
+end
+
+local rp = RaycastParams.new()
+rp.FilterType = Enum.RaycastFilterType.Exclude
+
+local function updateSwords(dt, now)
+for i = #swords, 1, -1 do
+local W = swords[i]
+local age = now - W.born
+if W.state == "emerge" then
+local a = math.clamp(age / 0.16, 0, 1)
+W.pos = W.start + W.dir * (W.len * 0.9 * a * (2 - a))
+if a >= 1 then W.state = "fly" W.flyAt = now W.flown = 0 end
+elseif W.state == "fly" then
+local fa = now - W.flyAt
+local speed = CFG.swordSpeed * (0.3 + 0.7 * math.min(1, fa / 0.28))
+local step = speed * dt
+local tipStart = W.pos + W.dir * W.len
+local hit = workspace:Raycast(tipStart, W.dir * (step + 0.5), rp)
+if hit then
+W.pos = hit.Position - W.dir * (W.len * (0.55 + math.random() * 0.15))
+W.state = "stuck"
+W.stuckAt = now
+impact(hit.Position, hit.Normal, W.sc)
+else
+W.pos = W.pos + W.dir * step
+W.flown += step
+if W.flown > CFG.swordRange then W.state = "stuck" W.stuckAt = now - 2.4 W.fade = true end
+end
+else -- stuck, then fades away
+local sa = now - W.stuckAt
+local t = math.clamp((sa - 2.6) / 0.9, 0, 1)
+if t >= 1 then
+killSword(W)
+table.remove(swords, i)
+W = nil
+else
+for _, e in ipairs(W.parts) do
+e.part.Transparency = math.max(e.part.Transparency, t)
+end
+if W.trail then W.trail.Enabled = false end
+end
+end
+if W then
+local cf = CFrame.lookAt(W.pos, W.pos + W.dir) * CFrame.Angles(0, 0, W.roll)
+for _, e in ipairs(W.parts) do addCF(e.part, cf * e.off) end
+end
+end
+end
+
+local function updatePulses(now)
+for i = #pulses, 1, -1 do
+local q = pulses[i]
+local a = (now - q.born) / q.life
+if a >= 1 then
+pcall(function() q.part:Destroy() end)
+table.remove(pulses, i)
+elseif q.ball then
+local d = q.base * (1 + 6 * a)
+q.part.Size = Vector3.new(d, d, d)
+q.part.Transparency = 0.1 + 0.9 * a
+addCF(q.part, CFrame.new(q.pos))
+else
+local d = math.max(0.1, q.base * (1 + (q.grow or 1.9) * a))
+q.part.Size = Vector3.new(0.05, d, d)
+local t0 = q.t0 or 0.45
+q.part.Transparency = t0 + (1 - t0) * a
+addCF(q.part, CFrame.lookAt(q.pos, q.pos + q.dir) * CFrame.Angles(0, math.pi / 2, 0))
+end
+end
+end
+
+local hideLists = setmetatable({}, { __mode = "k" })
+local hiddenNow = {}
+local function partsOf(tool)
+local list = hideLists[tool]
+if not list then
+list = {}
+hideLists[tool] = list
+for _, d in ipairs(tool:GetDescendants()) do
+if d:IsA("BasePart") then table.insert(list, d) end
+end
+fxConnect(tool.DescendantAdded, function(d)
+if d:IsA("BasePart") then table.insert(list, d) end
+end)
+end
+return list
+end
+local function setHidden(tool, on)
+local list = partsOf(tool)
+for i = #list, 1, -1 do
+local d = list[i]
+if d.Parent then d.LocalTransparencyModifier = on and 1 or 0
+else table.remove(list, i) end
+end
+end
+local function unhideAll()
+for tool in pairs(hiddenNow) do pcall(setHidden, tool, false) end
+table.clear(hiddenNow)
+end
+
+CFG.impact = true         -- anime-style impact frame when the gate opens
+CFG.impactOnFire = true   -- lighter gold flash when a barrage starts
+CFG.tint = true           -- warm gold colour on your screen while the gate is open
+CFG.shake = true          -- one short camera shake when the gate opens (never on shots)
+CFG.aura = true           -- ground magic circle, light pillar and gold dust around every open gate
+CFG.sigilSize = 13
+local Lighting = game:GetService("Lighting")
+local impactGui = nil
+local lastImpact, lastBarrage = 0, 0
+
+local function ensureImpact()
+if impactGui and impactGui.Parent then return end
+impactGui = Instance.new("ScreenGui")
+impactGui.Name = "GateImpact"
+impactGui.ResetOnSpawn = false
+impactGui.IgnoreGuiInset = true
+impactGui.DisplayOrder = 980
+impactGui.Parent = uiParent
+end
+
+local impactCC = nil
+local function pulseCC(power)
+if not impactCC or not impactCC.Parent then
+impactCC = Instance.new("ColorCorrectionEffect")
+impactCC.Name = "GateImpactCC"
+impactCC.Parent = Lighting
+end
+impactCC.Brightness = 0.16 * power
+impactCC.Contrast = 0.45 * power
+impactCC.Saturation = 0.4 * power
+TweenService:Create(impactCC, TweenInfo.new(0.5), { Brightness = 0, Contrast = 0, Saturation = 0 }):Play()
+end
+
+local function impactFrame(power)
+if not CFG.impact or os.clock() - lastImpact < 0.35 then return end
+lastImpact = os.clock()
+local strong = power >= 1
+task.spawn(function()
+ensureImpact()
+local vs = workspace.CurrentCamera.ViewportSize
+local diag = math.sqrt(vs.X * vs.X + vs.Y * vs.Y)
+local holder = Instance.new("Frame")
+holder.BackgroundTransparency = 1
+holder.BorderSizePixel = 0
+holder.Size = UDim2.fromScale(1, 1)
+holder.Parent = impactGui
+local bg = Instance.new("Frame")
+bg.BorderSizePixel = 0
+bg.Size = UDim2.fromScale(1, 1)
+bg.Parent = holder
+local lines = {}
+for i = 1, (strong and 48 or 28) do
+local ang = math.random() * 360
+local r0 = diag * (0.05 + math.random() * 0.15)
+local len = diag * (0.22 + math.random() * 0.5)
+local f = Instance.new("Frame")
+f.AnchorPoint = Vector2.new(0.5, 0.5)
+f.BorderSizePixel = 0
+f.Size = UDim2.fromOffset(len, 2 + math.random() * (strong and 16 or 8))
+local rad = math.rad(ang)
+f.Position = UDim2.new(0.5, math.cos(rad) * (r0 + len / 2), 0.5, math.sin(rad) * (r0 + len / 2))
+f.Rotation = ang
+f.Parent = holder
+lines[i] = f
+end
+local function paint(bgColor, bgT, lineColor, lineT)
+bg.BackgroundColor3 = bgColor
+bg.BackgroundTransparency = bgT
+for _, f in ipairs(lines) do
+f.BackgroundColor3 = lineColor
+f.BackgroundTransparency = lineT
+end
+end
+if strong then
+paint(Color3.new(1, 1, 1), 0, Color3.new(0, 0, 0), 0) -- stark white frame with black speed lines
+task.wait(0.06)
+paint(Color3.new(0, 0, 0), 0, Color3.new(1, 1, 1), 0) -- inverted frame
+task.wait(0.06)
+end
+paint(GOLD_HI, strong and 0.25 or 0.55, Color3.new(1, 1, 1), 0.1)
+pulseCC(strong and 1 or 0.5)
+local ti = TweenInfo.new(strong and 0.55 or 0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+TweenService:Create(bg, ti, { BackgroundTransparency = 1 }):Play()
+for _, f in ipairs(lines) do
+TweenService:Create(f, ti, { BackgroundTransparency = 1, Size = UDim2.fromOffset(f.Size.X.Offset * 1.7, 0) }):Play()
+end
+task.wait(0.6)
+holder:Destroy()
+end)
+end
+
+local shakeAmp = 0
+local function shakeKick(a)
+if CFG.shake then shakeAmp = math.max(shakeAmp, a) end
+end
+pcall(function() RunService:UnbindFromRenderStep("GateShake") end)
+RunService:BindToRenderStep("GateShake", Enum.RenderPriority.Camera.Value + 1, function(dt)
+if shakeAmp < 0.01 then return end
+local cam = workspace.CurrentCamera
+local a = shakeAmp * 0.012
+cam.CFrame = cam.CFrame * CFrame.Angles((math.random() - 0.5) * a, (math.random() - 0.5) * a, (math.random() - 0.5) * a * 0.6)
+shakeAmp = shakeAmp * (1 - math.min(1, dt * 7))
+end)
+
+local tintCC, tintWanted = nil, false
+local function tintOn()
+tintWanted = true
+if not CFG.tint then return end
+if not tintCC or not tintCC.Parent then
+tintCC = Instance.new("ColorCorrectionEffect")
+tintCC.Name = "GateTint"
+tintCC.Parent = Lighting
+end
+TweenService:Create(tintCC, TweenInfo.new(1.2), { TintColor = Color3.fromRGB(255, 232, 196), Saturation = 0.12, Contrast = 0.04 }):Play()
+end
+local function tintOff(instant)
+tintWanted = false
+if not tintCC or not tintCC.Parent then return end
+if instant then pcall(function() tintCC:Destroy() end) tintCC = nil return end
+local cc = tintCC
+TweenService:Create(cc, TweenInfo.new(1.0), { TintColor = Color3.new(1, 1, 1), Saturation = 0, Contrast = 0 }):Play()
+task.delay(1.1, function()
+if tintCC == cc and not tintWanted then pcall(function() cc:Destroy() end) tintCC = nil end
+end)
+end
+
+local auras = {}
+
+local function ringBurst(center, base, grow, life, transp)
+local part = mkPart("cyl", Vector3.new(0.05, base, base), GOLD, transp or 0.4)
+table.insert(pulses, { part = part, born = os.clock(), life = life, pos = center, dir = UPISH, base = base, grow = grow, t0 = transp or 0.4 })
+end
+
+local function newAura(owner, info)
+local rr = info.root
+local A = {
+owner = owner, root = rr, ch = info.ch, isSelf = info.isSelf, born = os.clock(), closing = false, closedAt = 0,
+nextGround = 0, gy = rr.Position.Y - 3, gyT = rr.Position.Y - 3, spin = math.random() * 6.28,
+outer = {}, inner = {}, runes = {}, tri = {},
+}
+A.rp = RaycastParams.new()
+A.rp.FilterType = Enum.RaycastFilterType.Exclude
+for i = 1, 56 do A.outer[i] = mkPart("block", Vector3.new(1, 0.08, 0.34), GOLD_HI, 0) end
+for i = 1, 36 do A.inner[i] = mkPart("block", Vector3.new(1, 0.08, 0.22), GOLD, 0.05) end
+for i = 1, 18 do A.runes[i] = mkPart("block", Vector3.new(1, 0.08, 0.5), GOLD, 0.1) end
+for i = 1, 6 do A.tri[i] = mkPart("block", Vector3.new(0.3, 0.08, 1), GOLD_HI, 0.05) end
+A.disc = mkPart("cyl", Vector3.new(0.05, 1, 1), GOLD, 0.85)
+A.pillar = mkPart("cyl", Vector3.new(90, 4, 4), GOLD, 0.55)
+A.core = mkPart("cyl", Vector3.new(90, 1.6, 1.6), GOLD_HI, 0.2)
+local holder = Instance.new("Part")
+holder.Anchored = true holder.CanCollide = false holder.CanQuery = false holder.CanTouch = false
+holder.Transparency = 1
+holder.Size = Vector3.new(20, 0.2, 20)
+holder.Parent = folder()
+A.holder = holder
+local e = Instance.new("ParticleEmitter")
+e.Rate = 0
+e.Lifetime = NumberRange.new(2.2, 4)
+e.Speed = NumberRange.new(1, 3.5)
+e.SpreadAngle = Vector2.new(20, 20)
+e.EmissionDirection = Enum.NormalId.Top
+e.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.38), NumberSequenceKeypoint.new(1, 0) })
+e.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.2, 0.1), NumberSequenceKeypoint.new(1, 1) })
+e.Color = ColorSequence.new(GOLD_HI, GOLD)
+e.LightEmission = 1
+e.Acceleration = Vector3.new(0, 1.2, 0)
+e.Parent = holder
+A.dust = e
+local b = Instance.new("ParticleEmitter")
+b.Rate = 0
+b.Lifetime = NumberRange.new(0.8, 1.8)
+b.Speed = NumberRange.new(25, 55)
+b.SpreadAngle = Vector2.new(35, 35)
+b.EmissionDirection = Enum.NormalId.Top
+b.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.7), NumberSequenceKeypoint.new(1, 0) })
+b.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) })
+b.Color = ColorSequence.new(GOLD_HI, GOLD)
+b.LightEmission = 1
+b.Acceleration = Vector3.new(0, -22, 0)
+b.Parent = holder
+A.burst = b
+return A
+end
+
+local function destroyAura(A)
+for _, group in ipairs({ A.outer, A.inner, A.runes, A.tri }) do
+for _, p in ipairs(group) do pcall(function() p:Destroy() end) end
+end
+for _, p in ipairs({ A.disc, A.pillar, A.core, A.holder }) do
+if p then pcall(function() p:Destroy() end) end
+end
+end
+
+local function flatRing(group, c, R, theta, thick, dashed, radial)
+local n = #group
+local len = (2 * math.pi * R / n) * (dashed and 0.6 or 1.08)
+for i, p in ipairs(group) do
+local a = theta + (i - 1) * 2 * math.pi / n
+p.Size = Vector3.new(radial and R * 0.14 or len, 0.08, thick)
+addCF(p, CFrame.new(c + Vector3.new(math.cos(a) * R, 0.06, math.sin(a) * R)) * CFrame.Angles(0, radial and -a or (-a - math.pi / 2), 0))
+end
+end
+
+local function onGateOpen(A)
+local rr = A.root
+local c = Vector3.new(rr.Position.X, A.gy, rr.Position.Z)
+task.spawn(function()
+for i = 1, 3 do
+ringBurst(c + Vector3.new(0, 0.1, 0), 10, 5 + i * 2.5, 0.9 + i * 0.15, 0.35)
+task.wait(0.14)
+end
+end)
+A.burst:Emit(90)
+if A.isSelf then
+impactFrame(1)
+shakeKick(3)
+tintOn()
+else
+local me = char() and char():FindFirstChild("HumanoidRootPart")
+if me and (me.Position - rr.Position).Magnitude < 80 then impactFrame(0.5) end
+end
+end
+
+local function onGateClose(A)
+local rr = A.root
+if rr and rr.Parent then
+ringBurst(Vector3.new(rr.Position.X, A.gy + 0.1, rr.Position.Z), 26, -0.75, 0.6, 0.3)
+end
+if A.isSelf then tintOff(false) end
+end
+
+local function updateAura(A, now)
+local rr = A.root
+if not (rr and rr.Parent) then return end
+if now >= A.nextGround then
+A.nextGround = now + 0.2
+A.rp.FilterDescendantsInstances = { A.ch or rr.Parent, folder() }
+local hit = workspace:Raycast(rr.Position + Vector3.new(0, 1, 0), Vector3.new(0, -40, 0), A.rp)
+A.gyT = hit and (hit.Position.Y + 0.1) or (rr.Position.Y - 3)
+end
+A.gy += (A.gyT - A.gy) * 0.3
+local age = now - A.born
+local open = A.closing and (1 - math.clamp((now - A.closedAt) / 0.7, 0, 1)) or math.clamp(age / 0.7, 0, 1)
+local s = A.closing and open * open or (open <= 0 and 0 or backOut(open))
+local R = CFG.sigilSize * math.max(s, 0.001)
+local c = Vector3.new(rr.Position.X, A.gy, rr.Position.Z)
+local th = now * 0.5 + A.spin
+flatRing(A.outer, c, R, th * 0.6, 0.34, false)
+flatRing(A.inner, c, R * 0.8, -th * 0.9, 0.22, true)
+flatRing(A.runes, c, R * 0.9, th * 0.7, 0.5, false, true)
+for sq = 0, 1 do
+local verts = {}
+for k = 0, 2 do
+local a = th * 0.4 + sq * math.pi / 3 + k * 2 * math.pi / 3
+verts[k + 1] = c + Vector3.new(math.cos(a) * R * 0.72, 0.08, math.sin(a) * R * 0.72)
+end
+for k = 1, 3 do
+local v1, v2 = verts[k], verts[k % 3 + 1]
+local p = A.tri[sq * 3 + k]
+p.Size = Vector3.new(0.3, 0.08, (v2 - v1).Magnitude)
+addCF(p, CFrame.lookAt((v1 + v2) / 2, v2))
+end
+end
+A.disc.Size = Vector3.new(0.05, R * 1.96, R * 1.96)
+addCF(A.disc, CFrame.new(c + Vector3.new(0, 0.03, 0)) * CFrame.Angles(0, 0, math.pi / 2))
+if age < 1.7 and not A.closing then
+local a = age / 1.7
+local w = 0.5 + 6 * math.sqrt(1 - a)
+A.pillar.Size = Vector3.new(90, w, w)
+A.pillar.Transparency = 0.45 + 0.55 * a
+A.core.Size = Vector3.new(90, w * 0.4, w * 0.4)
+A.core.Transparency = 0.15 + 0.85 * a
+addCF(A.pillar, CFrame.new(c + Vector3.new(0, 45, 0)) * CFrame.Angles(0, 0, math.pi / 2))
+addCF(A.core, CFrame.new(c + Vector3.new(0, 45, 0)) * CFrame.Angles(0, 0, math.pi / 2))
+elseif A.pillar and A.pillar.Transparency < 1 then
+A.pillar.Transparency = 1
+A.core.Transparency = 1
+end
+A.holder.Size = Vector3.new(R * 1.5, 0.2, R * 1.5)
+A.holder.CFrame = CFrame.new(c + Vector3.new(0, 0.4, 0))
+A.dust.Rate = A.closing and 0 or math.floor(34 * open)
+end
+
+local remoteWatched = setmetatable({}, { __mode = "k" })
+local function remoteOffsets(total)
+local out = { Vector3.new(0, CFG.heldHeight, CFG.heldBack) }
+local n = total - 1
+local rows = math.clamp(math.ceil(n / CFG.gunsPerRow), 1, CFG.maxRows)
+local cols = math.max(1, math.ceil(n / rows))
+local radius = math.max(CFG.minRadius, (cols * CFG.gunSpacing) / (2 * math.sin(math.rad(CFG.fanAngle))))
+for i = 1, n do
+local row = ((i - 1) % rows) + 1
+local col = math.ceil(i / rows)
+local f = cols > 1 and ((col - 1) / (cols - 1)) * 2 - 1 or 0
+if row % 2 == 0 and cols > 1 then f = math.clamp(f + 1 / cols, -1, 1) end
+local ang = math.rad(CFG.fanAngle) * f
+table.insert(out, Vector3.new(
+math.sin(ang) * radius,
+CFG.baseHeight + (row - 1) * CFG.rowSpacing + math.cos(ang) * CFG.lift,
+CFG.back + (1 - math.cos(ang)) * radius * 0.35
+))
+end
+return out
+end
+
+local lastFx = os.clock()
+local fallbackFor = 0
+local nextFallback = 0
+local function floatingTools()
+local list = {}
+local c = char()
+for tool, s in pairs(gunsState) do
+if tool.Parent == c and s.handle and s.handle.Parent then table.insert(list, tool) end
+end
+return list
+end
+
+fireTool = function(tool)
+local P = portals[tool]
+if not P or P.closing then return end
+P.kick = 1
+if not P.remote then
+local nowF = os.clock()
+if nowF - lastBarrage > 2.5 and CFG.impactOnFire then impactFrame(0.5) end
+lastBarrage = nowF
+end
+P.pulseAt = os.clock() + 0.05
+if P.emitter then P.emitter:Emit(6) end
+if CFG.swords then spawnSword(P) end
+if P.remote then playShot(P.core, 0.7) else playShot() end
+end
+
+local menuOpenNow = function() return getgenv().__BabylonMenuOpen == true end
+
+fxConnect(RunService.RenderStepped, function()
+local now = os.clock()
+local dt = math.min(now - lastFx, 0.1)
+lastFx = now
+local c = char()
+local root = c and c:FindFirstChild("HumanoidRootPart")
+local floating = CFG.fx and enabled and userHeld ~= nil and root ~= nil
+local tools = floating and floatingTools() or {}
+
+local down = UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+if down then
+if not mouseWasDown then fallbackFor = now nextFallback = now + 0.35 end
+elseif mouseWasDown then
+mouseUpAt = now
+end
+mouseWasDown = down
+
+for _, t in ipairs(tools) do watchTool(t) end
+
+local wantMute = floating and CFG.muteGunSounds
+if wantMute ~= muted then applyMute(wantMute) end
+
+local want = {}
+local remoteOwners = {}
+for _, t in ipairs(tools) do want[t] = true end
+if CFG.fx and CFG.watchOthers then
+local shown = 0
+for _, pl in ipairs(Players:GetPlayers()) do
+if pl ~= lp and shown < 2 then
+local ch = pl.Character
+local rr = ch and ch:FindFirstChild("HumanoidRootPart")
+if rr and (not root or (rr.Position - root.Position).Magnitude < CFG.watchRange) then
+local guns = {}
+for _, t in ipairs(ch:GetChildren()) do
+if isGun(t) then table.insert(guns, t) end
+end
+if #guns >= 2 then
+shown += 1
+remoteOwners[pl] = { root = rr, ch = ch }
+local flat = rr.CFrame.LookVector * Vector3.new(1, 0, 1)
+if flat.Magnitude < 0.01 then flat = Vector3.new(0, 0, -1) end
+local frame = CFrame.lookAt(rr.Position, rr.Position + flat.Unit)
+local offs = remoteOffsets(#guns)
+local look = rr.CFrame.LookVector
+for i, t in ipairs(guns) do
+want[t] = true
+if not remoteWatched[t] then
+remoteWatched[t] = true
+hookAttrs(t)
+for _, d in ipairs(t:GetDescendants()) do
+if d:IsA("Sound") then
+fxConnect(d.Played, function()
+if looksLikeShot(d.Name) then onShot(t, "remote sound " .. d.Name) end
+end)
+end
+end
+end
+local P = portals[t]
+if CFG.portals and (not P or P.closing) then
+if P then destroyPortal(P) end
+P = newPortal(t, #guns)
+P.remote = true
+portals[t] = P
+end
+if P and not P.closing then
+P.pos = frame * offs[i]
+P.dir = look
+end
+end
+end
+end
+end
+end
+end
+
+if CFG.portals then
+portalCount = #tools
+for _, t in ipairs(tools) do
+local P = portals[t]
+if not P or P.closing then
+if P then destroyPortal(P) end
+portals[t] = newPortal(t, #tools)
+end
+end
+end
+for t, P in pairs(portals) do
+if (not want[t]) or not CFG.portals then
+if not P.closing then P.closing = true P.closedAt = now end
+if now - P.closedAt > 0.32 then
+destroyPortal(P)
+portals[t] = nil
+end
+end
+end
+
+local target
+if floating then
+local cam = workspace.CurrentCamera
+local loc = UIS:GetMouseLocation()
+local ray = cam:ViewportPointToRay(loc.X, loc.Y)
+rp.FilterDescendantsInstances = { c, folder() }
+local hit = workspace:Raycast(ray.Origin, ray.Direction * 700, rp)
+target = hit and hit.Position or (ray.Origin + ray.Direction * 500)
+end
+
+table.clear(cfParts)
+table.clear(cfValues)
+local center, nCenter = Vector3.zero, 0
+for t, P in pairs(portals) do
+local s = gunsState[t]
+local h = s and s.handle
+if P.remote then
+if not P.closing then
+center += P.pos
+nCenter += 1
+end
+elseif h and h.Parent and not P.closing then
+P.pos = h.Position
+local d = target and (target - P.pos) or nil
+if d and d.Magnitude > 6 then
+P.dir = d.Unit
+elseif root then
+P.dir = root.CFrame.LookVector
+end
+center += P.pos
+nCenter += 1
+end
+updatePortal(P, now)
+end
+
+local owners = {}
+if CFG.fx and CFG.aura then
+if floating and root then owners[lp] = { root = root, ch = c, isSelf = true } end
+for pl, info in pairs(remoteOwners) do owners[pl] = info end
+end
+for owner, info in pairs(owners) do
+local A = auras[owner]
+if not A or A.closing then
+if A then destroyAura(A) end
+A = newAura(owner, info)
+auras[owner] = A
+onGateOpen(A)
+end
+A.root = info.root
+end
+for owner, A in pairs(auras) do
+if not owners[owner] and not A.closing then
+A.closing = true
+A.closedAt = now
+onGateClose(A)
+end
+updateAura(A, now)
+if A.closing and now - A.closedAt > 0.8 then
+destroyAura(A)
+auras[owner] = nil
+end
+end
+
+if CFG.hideGuns then
+for t in pairs(want) do
+hiddenNow[t] = true
+setHidden(t, true)
+end
+end
+for t in pairs(hiddenNow) do
+if not (CFG.hideGuns and want[t]) then
+pcall(setHidden, t, false)
+hiddenNow[t] = nil
+end
+end
+
+if floating and CFG.fallbackFire and down and not menuOpenNow() and now >= nextFallback
+and now - lastShotAny > 0.45 and not UIS:GetFocusedTextBox() then
+nextFallback = now + 0.17
+dbg("fallback volley")
+for _, t in ipairs(tools) do
+lastShot[t] = nil
+onShot(t, "fallback")
+end
+lastShotAny = 0
+end
+
+updateSwords(dt, now)
+updatePulses(now)
+if #cfParts > 0 then
+pcall(function() workspace:BulkMoveTo(cfParts, cfValues, Enum.BulkMoveMode.FireCFrameChanged) end)
+end
+
+audioStep(dt, floating, nCenter > 0 and center / nCenter or (root and root.Position or nil))
+end)
+
+local function fxStop()
+for _, cn in ipairs(fxConns) do cn:Disconnect() end
+table.clear(fxConns)
+applyMute(false)
+unhideAll()
+destroyAudio()
+pcall(function() RunService:UnbindFromRenderStep("GateShake") end)
+tintOff(true)
+if impactCC then pcall(function() impactCC:Destroy() end) impactCC = nil end
+if impactGui then pcall(function() impactGui:Destroy() end) impactGui = nil end
+for _, A in pairs(auras) do destroyAura(A) end
+table.clear(auras)
+for _, P in pairs(portals) do destroyPortal(P) end
+table.clear(portals)
+for _, W in ipairs(swords) do killSword(W) end
+table.clear(swords)
+if fxFolder then pcall(function() fxFolder:Destroy() end) fxFolder = nil end
+end
+
+if CFG.autoDownload then task.spawn(fetchSounds) end
+local floatApi = getgenv().FloatGuns
+if floatApi then
+local oldStop = floatApi.stop
+floatApi.stop = function()
+fxStop()
+oldStop()
+end
+floatApi.fx = {
+reloadSounds = function() table.clear(audioId) table.clear(audioTry) noThemeNote = false task.spawn(fetchSounds) end,
+fetch = fetchSounds,
+debug = function(on) debugOn = on ~= false print("[GateFX] debug", debugOn) end,
+sounds = function()
+for _, i in ipairs(gunSounds) do print("[GateFX] sound", i.snd:GetFullName(), i.vol) end
+end,
+test = function() for _, P in pairs(portals) do fireTool(P.tool) end end,
+}
+end
 end)
 
 run("Fuga", function()
@@ -4393,10 +5601,12 @@ TextColor3 = THEME.sub,
 
 local menuOpen = not splash.active
 local menuToken = 0
+getgenv().__BabylonMenuOpen = menuOpen
 local function setMenu(show)
 menuToken += 1
 local mine = menuToken
 menuOpen = show
+getgenv().__BabylonMenuOpen = show
 if show then
 win.Visible = true
 winScale.Scale = 0.93
@@ -4732,6 +5942,26 @@ addSlider(gate, "Held gun height", 2, 8, 0.5, function() local g = api("FloatGun
 addSlider(gate, "Guns per row", 2, 12, 1, function() local g = api("FloatGuns") return g and g.cfg.gunsPerRow or 6 end, function(v) local g = api("FloatGuns") if g then g.cfg.gunsPerRow = v end end)
 addToggle(gate, "Reload all guns together", function() local g = api("FloatGuns") return g and g.cfg.reloadAll end, function(v) local g = api("FloatGuns") if g then g.cfg.reloadAll = v end end)
 addToggle(gate, "No camera recoil (screen shake)", function() local g = api("FloatGuns") return g and g.cfg.noRecoil end, function(v) local g = api("FloatGuns") if g then g.setNoRecoil(v) end end)
+addToggle(gate, "Gate FX (portals, swords, music)", function() local g = api("FloatGuns") return g and g.cfg.fx end, function(v) local g = api("FloatGuns") if g then g.cfg.fx = v end end)
+addToggle(gate, "  Golden portals", function() local g = api("FloatGuns") return g and g.cfg.portals end, function(v) local g = api("FloatGuns") if g then g.cfg.portals = v end end)
+addToggle(gate, "  Hide gun models (your screen only)", function() local g = api("FloatGuns") return g and g.cfg.hideGuns end, function(v) local g = api("FloatGuns") if g then g.cfg.hideGuns = v end end)
+addToggle(gate, "  Swords and spears fly out on every shot", function() local g = api("FloatGuns") return g and g.cfg.swords end, function(v) local g = api("FloatGuns") if g then g.cfg.swords = v end end)
+addToggle(gate, "  See other players' gates (needs the same script, 2+ guns out)", function() local g = api("FloatGuns") return g and g.cfg.watchOthers end, function(v) local g = api("FloatGuns") if g then g.cfg.watchOthers = v end end)
+addToggle(gate, "  Impact frame when the gate opens", function() local g = api("FloatGuns") return g and g.cfg.impact end, function(v) local g = api("FloatGuns") if g then g.cfg.impact = v end end)
+addToggle(gate, "  Gold flash when a barrage starts", function() local g = api("FloatGuns") return g and g.cfg.impactOnFire end, function(v) local g = api("FloatGuns") if g then g.cfg.impactOnFire = v end end)
+addToggle(gate, "  Ground sigil, light pillar, gold dust", function() local g = api("FloatGuns") return g and g.cfg.aura end, function(v) local g = api("FloatGuns") if g then g.cfg.aura = v end end)
+addToggle(gate, "  Gold screen tint", function() local g = api("FloatGuns") return g and g.cfg.tint end, function(v) local g = api("FloatGuns") if g then g.cfg.tint = v end end)
+addToggle(gate, "  Camera shake when the gate opens", function() local g = api("FloatGuns") return g and g.cfg.shake end, function(v) local g = api("FloatGuns") if g then g.cfg.shake = v end end)
+addSlider(gate, "Sigil size", 6, 30, 1, function() local g = api("FloatGuns") return g and g.cfg.sigilSize or 13 end, function(v) local g = api("FloatGuns") if g then g.cfg.sigilSize = v end end)
+addToggle(gate, "  Mute the guns' own sounds", function() local g = api("FloatGuns") return g and g.cfg.muteGunSounds end, function(v) local g = api("FloatGuns") if g then g.cfg.muteGunSounds = v end end)
+addToggle(gate, "  Show swords while holding click (if a shot is not detected)", function() local g = api("FloatGuns") return g and g.cfg.fallbackFire end, function(v) local g = api("FloatGuns") if g then g.cfg.fallbackFire = v end end)
+addSlider(gate, "Music volume", 0, 3, 0.05, function() local g = api("FloatGuns") return g and g.cfg.themeVolume or 0.6 end, function(v) local g = api("FloatGuns") if g then g.cfg.themeVolume = v end end)
+addSlider(gate, "Shot sound volume", 0, 3, 0.05, function() local g = api("FloatGuns") return g and g.cfg.shotVolume or 0.8 end, function(v) local g = api("FloatGuns") if g then g.cfg.shotVolume = v end end)
+addSlider(gate, "Portal hum volume", 0, 3, 0.05, function() local g = api("FloatGuns") return g and g.cfg.humVolume or 0.35 end, function(v) local g = api("FloatGuns") if g then g.cfg.humVolume = v end end)
+addSlider(gate, "Portal size", 1.5, 8, 0.1, function() local g = api("FloatGuns") return g and g.cfg.portalSize or 3.0 end, function(v) local g = api("FloatGuns") if g then g.cfg.portalSize = v end end)
+addSlider(gate, "Sword speed", 120, 700, 10, function() local g = api("FloatGuns") return g and g.cfg.swordSpeed or 340 end, function(v) local g = api("FloatGuns") if g then g.cfg.swordSpeed = v end end)
+addButton(gate, "Download / reload sound files", function() local g = api("FloatGuns") if g and g.fx then g.fx.reloadSounds() end end)
+infoLabel(gate, "Music and shot sounds download by themselves the first time. If they are missing, press the button above. You can also put your own gate_theme.mp3 / gate_shot.mp3 in the executor's workspace folder. The portals and swords are only on your own screen.", 70)
 infoLabel(gate, "Takes effect when you equip a gun. If a gun ever will not fire, turn this off, rejoin, and tell the owner.", 44)
 
 local fuga = newTab("Fuga")
