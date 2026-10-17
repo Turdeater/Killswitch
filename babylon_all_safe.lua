@@ -1054,7 +1054,7 @@ end
 
 CFG.autoDownload = true
 CFG.soundBase = "https://raw.githubusercontent.com/Turdeater/Killswitch/main/"
-local SOUND_FILES = { "gate_theme.mp3", "gate_shot.mp3", "gate_hum.wav", "gate_open.wav" }
+local SOUND_FILES = { "gate_theme.mp3", "gate_shot.mp3", "gate_hum.wav", "gate_open.wav", "fuga_voice.mp3" }
 local function fetchSounds(list)
 if not (isfile and writefile and getcustomasset) then return end
 local got = 0
@@ -2201,6 +2201,7 @@ bob = 0.25,
 arrow = true,        -- the big flame arrow that forms while you spray (visual only)
 impact = true,       -- one very short black/white "impact frame" flash when you start spraying (visual only)
 mega = true,         -- shrine gate, sigil, lightning, ember storm, red sky, slashes and a giant kanji while you spray (visual only)
+voiceVolume = 1.6,   -- volume of the voice line
 voiceFile = "fuga_voice", -- put your own fuga_voice.mp3 (or .ogg / .wav) in the executor's workspace folder and it plays when you start spraying
 cinematic = true,    -- black bars, dark red tint and the typed chant while you spray (visual only)
 sound = true,        -- sound effects while you spray (the game's built-in sounds)
@@ -3327,6 +3328,48 @@ megaStop(true)
 for p, s in pairs(remoteShows) do pcall(function() s.stop(true) end) remoteShows[p] = nil end
 end
 
+local voiceAsset = nil
+local myVoice = nil
+local function voiceId()
+if voiceAsset then return voiceAsset end
+if not (isfile and getcustomasset) then return nil end
+local id
+pcall(function()
+for _, ext in ipairs({ ".mp3", ".ogg", ".wav" }) do
+local name = CFG.voiceFile .. ext
+if isfile(name) then id = getcustomasset(name) break end
+end
+end)
+voiceAsset = id
+return id
+end
+local function playVoice(parent, mul)
+local ok, snd = pcall(function()
+local id = voiceId()
+if not id then return nil end
+local sn = Instance.new("Sound")
+sn.SoundId = id
+sn.Volume = CFG.voiceVolume * (mul or 1)
+if parent then
+sn.RollOffMinDistance = 20
+sn.RollOffMaxDistance = 220
+end
+sn.Parent = parent or SoundService
+sn:Play()
+Debris:AddItem(sn, 45)
+return sn
+end)
+return ok and snd or nil
+end
+local function fadeVoice(sn, delay)
+if not sn then return end
+task.delay(delay or 0, function()
+if not sn.Parent then return end
+TweenService:Create(sn, TweenInfo.new(1.2), { Volume = 0 }):Play()
+task.delay(1.3, function() pcall(function() sn:Destroy() end) end)
+end)
+end
+
 local function remoteStart(p, byRockets)
 if remoteShows[p] or not CFG.watch or p == lp then return remoteShows[p] end
 local count = 0
@@ -3340,7 +3383,8 @@ local show = newShow({ isSelf = false, getRoot = function() local ch = p.Charact
 show.byRockets = byRockets
 remoteShows[p] = show
 show.start()
-task.delay(15, function() if remoteShows[p] == show then remoteShows[p] = nil show.stop(false) end end)
+show.voice = playVoice(root, 0.9)
+task.delay(15, function() if remoteShows[p] == show then remoteShows[p] = nil show.stop(false) fadeVoice(show.voice, 0) end end)
 return show
 end
 local function remoteFinish(p)
@@ -3348,6 +3392,7 @@ local show = remoteShows[p]
 if not show then return end
 remoteShows[p] = nil
 show.flash()
+fadeVoice(show.voice, 1.5)
 task.delay(2.2, function() show.stop(false) end)
 end
 
@@ -3430,30 +3475,9 @@ if r then r:FireServer(text, "All") end
 end
 end)
 end
-local voiceAsset = nil
-local function playVoice()
-pcall(function()
-if not (isfile and getcustomasset) then return end
-local id = voiceAsset
-if not id then
-for _, ext in ipairs({ ".mp3", ".ogg", ".wav" }) do
-local name = CFG.voiceFile .. ext
-if isfile(name) then id = getcustomasset(name) break end
-end
-voiceAsset = id
-end
-if id then
-local snd = Instance.new("Sound")
-snd.SoundId = id
-snd.Volume = 3
-snd.Parent = SoundService
-snd:Play()
-Debris:AddItem(snd, 15)
-end
-end)
-end
 local function pressEffects()
-playVoice()
+if myVoice then pcall(function() myVoice:Destroy() end) end
+myVoice = playVoice()
 if CFG.mega then pcall(megaStart) end
 if CFG.chat and os.clock() - lastChat > 6 then
 lastChat = os.clock()
@@ -3473,6 +3497,8 @@ cueSent = false
 local wait = math.max(0, 1.2 - (os.clock() - lastChat))
 task.delay(wait, function() sayChat("FUGA.") end)
 end
+fadeVoice(myVoice, 1.2)
+myVoice = nil
 pcall(megaStop, false)
 if CFG.mega then shake(2.2, 0.5) end
 playSound(S_LAUNCH, 0.9, 0.8)
@@ -5980,6 +6006,7 @@ if f then toast("Formation: " .. f.nextFormation()) end
 end)
 addToggle(fuga, "Arm pose while spraying (others see it)", function() local f = api("FugaRing") return f and f.cfg.pose end, function(v) local f = api("FugaRing") if f then f.cfg.pose = v end end)
 addToggle(fuga, "See other players' Fuga show (when they spray Molotovs)", function() local f = api("FugaRing") return f and f.cfg.watch end, function(v) local f = api("FugaRing") if f then f.cfg.watch = v end end)
+addSlider(fuga, "Voice line volume", 0, 4, 0.1, function() local f = api("FugaRing") return f and f.cfg.voiceVolume or 1.6 end, function(v) local f = api("FugaRing") if f then f.cfg.voiceVolume = v end end)
 addToggle(fuga, "Say Kai. / FUGA. in chat (lets script users see your show)", function() local f = api("FugaRing") return f and f.cfg.chat end, function(v) local f = api("FugaRing") if f then f.cfg.chat = v end end)
 addButton(fuga, "Preview the look (throws nothing)", function() local f = api("FugaRing") if f then f.preview() end end)
 addSlider(fuga, "Safe distance (studs)", 10, 80, 1, function() local f = api("FugaRing") return f and f.cfg.safeDistance or 25 end, function(v) local f = api("FugaRing") if f then f.cfg.safeDistance = v end end)
