@@ -437,7 +437,7 @@ if leftover then leftover:Destroy() end
 end
 end
 local loadErrors = {}
-local MODULE_TOTAL = 10
+local MODULE_TOTAL = 11
 local modulesDone = 0
 local function run(name, fn)
 print("[Babylon] loading " .. name)
@@ -906,6 +906,895 @@ if moved then g.C0 = newC0 end
 end
 end)
 end)
+run("Fuga", function()
+local CFG = {
+key = Enum.KeyCode.Z,
+height = 9,          -- how high the ring floats above your feet
+minRadius = 6,
+spacing = 1.7,       -- room per bottle around the ring (the ring grows with more Molotovs)
+spin = 1.6,          -- radians per second while it floats
+chargeTime = 0.45,   -- seconds the ring spins up before it throws
+gap = 0.05,          -- seconds between the throws of the "throw all" button
+sprayGap = 0.12,     -- seconds between throws while you hold the mouse button (machine gun)
+tilt = 40,           -- degrees the bottles lean outwards
+bob = 0.25,
+arrow = true,        -- the big flame arrow that forms while you spray (visual only)
+impact = true,       -- one very short black/white "impact frame" flash when you start spraying (visual only)
+cinematic = true,    -- black bars, dark red tint and the typed chant while you spray (visual only)
+sound = true,        -- sound effects while you spray (the game's built-in sounds)
+formation = "gyro",  -- how the Molotovs float while idle (other players see this): ring, gyro, wings, halo
+pose = true,         -- raise your arms in a hand-sign pose while you spray (other players see this)
+detach = true,       -- cut the bottles (and your arms in the pose) loose from the welds and place them directly, so other players see them where you do
+chat = false,        -- say "Kai." and "FUGA." in the game chat when you start spraying (everyone sees it)
+safeDistance = 25,   -- studs: a throw is held back if your cursor is pointing closer than this to you (it would burn you)
+voiceId = "",        -- optional: your own Roblox audio id (for example "rbxassetid://123456") played when the ring fires
+faceOffset = CFrame.Angles(math.rad(-90), 0, 0), -- how a bottle sits relative to its look direction
+}
+local on = false
+local adopted = {}
+local state = {}
+local spinAngle = 0
+local POSE_R, POSE_L = math.rad(110), math.rad(-110) -- arm raise angles: both arms point forward and slightly up (checked in game)
+local FORMS = { "ring", "gyro", "wings", "halo" }
+local smoothPos = setmetatable({}, { __mode = "k" })
+local lastChat = 0
+local fireBlend = 0 -- 0 = the ring floats around you, 1 = the Molotovs form a firing circle in front of you
+local lastWarn = 0
+local startT = 0
+local chargeStart = nil
+local volleying = false
+local spraying = false
+local sprayId = 0
+local fired = setmetatable({}, { __mode = "k" }) -- Molotovs already thrown (they are removed a moment later)
+local lastAdopt = 0
+local conns = {}
+local function char() return lp.Character end
+local function molotovsIn(container)
+local list = {}
+if container then
+for _, t in ipairs(container:GetChildren()) do
+if t:IsA("Tool") and t.Name:lower():find("molotov", 1, true) and t:FindFirstChild("Handle") then
+table.insert(list, t)
+end
+end
+end
+return list
+end
+local function gripFor(tool)
+local c = char()
+local handle = tool:FindFirstChild("Handle")
+local arm = c and c:FindFirstChild("Right Arm")
+if not arm or not handle then return end
+for _, d in ipairs(arm:GetChildren()) do
+if d:IsA("Weld") and d.Name == "RightGrip" and d.Part1 == handle then return d end
+end
+end
+local function restoreOne(tool)
+local st = state[tool]
+if not st then return end
+if st.grip and st.grip.Parent then
+pcall(function() st.grip.Enabled = true end)
+if st.part0 and st.part0.Parent then st.grip.Part0 = st.part0 end
+st.grip.C0 = st.c0
+end
+local h = st.handle
+if h and h.Parent then
+h.Massless = st.massless
+h.CanCollide = st.canCollide
+h.AssemblyLinearVelocity = Vector3.zero
+h.AssemblyAngularVelocity = Vector3.zero
+end
+state[tool] = nil
+end
+local mouse = lp:GetMouse()
+local aimAt = setmetatable({}, { __mode = "k" })
+local hooked = setmetatable({}, { __mode = "k" })
+local function hookTool(tool)
+if hooked[tool] then return end
+local rf = tool:FindFirstChild("MouseLoc")
+if not rf or not rf:IsA("RemoteFunction") then return end
+hooked[tool] = true
+pcall(function()
+rf.OnClientInvoke = function()
+local p = aimAt[tool]
+if p then aimAt[tool] = nil return p end
+return mouse.Hit.Position
+end
+end)
+end
+local function markAim(tool)
+pcall(function() aimAt[tool] = mouse.Hit.Position end)
+end
+local FIRE_TEX = "rbxasset://textures/particles/fire_main.dmg"
+local toolFx = setmetatable({}, { __mode = "k" })
+local base = nil -- invisible anchored part at your feet: ember disc + light
+local arrow = nil
+local arrowState = "idle" -- idle | charge | launch
+local arrowT = 0
+local lastDir = Vector3.new(0, 0, -1)
+local lastCenter = Vector3.zero
+local cineCleanup = function() end -- set below, once the cinematic code exists
+local function dropFx()
+cineCleanup()
+if arrow then pcall(function() arrow.part:Destroy() end) arrow = nil end
+arrowState = "idle"
+for tool, list in pairs(toolFx) do
+for _, o in ipairs(list) do pcall(function() o:Destroy() end) end
+end
+table.clear(toolFx)
+if base then pcall(function() base:Destroy() end) base = nil end
+end
+local function dressBottle(tool, handle)
+if toolFx[tool] then return end
+local made = {}
+toolFx[tool] = made
+pcall(function()
+local a0 = Instance.new("Attachment")
+a0.Position = Vector3.new(0, 0.7, 0)
+a0.Parent = handle
+local a1 = Instance.new("Attachment")
+a1.Position = Vector3.new(0, -0.7, 0)
+a1.Parent = handle
+local trail = Instance.new("Trail")
+trail.Attachment0, trail.Attachment1 = a0, a1
+trail.Lifetime = 0.55
+trail.LightEmission = 1
+trail.FaceCamera = true
+trail.Color = ColorSequence.new(Color3.fromRGB(255, 190, 70), Color3.fromRGB(200, 30, 10))
+trail.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
+trail.WidthScale = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0.2) })
+trail.Parent = handle
+local fire = Instance.new("ParticleEmitter")
+fire.Texture = FIRE_TEX
+fire.LightEmission = 1
+fire.Rate = 45
+fire.Lifetime = NumberRange.new(0.4, 0.8)
+fire.Speed = NumberRange.new(1, 3)
+fire.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1.8), NumberSequenceKeypoint.new(1, 0) })
+fire.Color = ColorSequence.new(Color3.fromRGB(255, 220, 120), Color3.fromRGB(220, 50, 10))
+fire.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
+fire.Parent = handle
+table.insert(made, a0) table.insert(made, a1) table.insert(made, trail) table.insert(made, fire)
+end)
+end
+local function ensureBase()
+if base and base.Parent then return base end
+pcall(function()
+local part = Instance.new("Part")
+part.Name = "FugaFx"
+part.Anchored = true
+part.CanCollide = false
+part.CanQuery = false
+part.CanTouch = false
+part.Transparency = 1
+part.Size = Vector3.new(10, 0.2, 10)
+local embers = Instance.new("ParticleEmitter")
+embers.Name = "Embers"
+embers.Texture = FIRE_TEX
+embers.LightEmission = 1
+embers.Rate = 25
+embers.Lifetime = NumberRange.new(0.8, 1.6)
+embers.Speed = NumberRange.new(3, 7)
+embers.EmissionDirection = Enum.NormalId.Top
+embers.Shape = Enum.ParticleEmitterShape.Disc
+embers.ShapeInOut = Enum.ParticleEmitterShapeInOut.Outward
+embers.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1.6), NumberSequenceKeypoint.new(1, 0) })
+embers.Color = ColorSequence.new(Color3.fromRGB(255, 200, 90), Color3.fromRGB(190, 30, 10))
+embers.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.2), NumberSequenceKeypoint.new(1, 1) })
+embers.Parent = part
+local col = Instance.new("Part")
+col.Name = "Column"
+col.Anchored = true
+col.CanCollide = false
+col.CanQuery = false
+col.CanTouch = false
+col.Transparency = 1
+col.Size = Vector3.new(2, 0.2, 2)
+local column = Instance.new("ParticleEmitter")
+column.Name = "Flame"
+column.Texture = FIRE_TEX
+column.LightEmission = 1
+column.Rate = 10
+column.Lifetime = NumberRange.new(0.9, 1.5)
+column.Speed = NumberRange.new(10, 16)
+column.SpreadAngle = Vector2.new(6, 6)
+column.EmissionDirection = Enum.NormalId.Top
+column.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 3.2), NumberSequenceKeypoint.new(1, 0) })
+column.Color = ColorSequence.new(Color3.fromRGB(255, 235, 150), Color3.fromRGB(215, 40, 10))
+column.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
+column.Parent = col
+col.Parent = part
+local light = Instance.new("PointLight")
+light.Name = "Glow"
+light.Color = Color3.fromRGB(255, 130, 40)
+light.Range = 24
+light.Brightness = 1.2
+light.Parent = part
+part.Parent = workspace
+base = part
+end)
+return base
+end
+local function pulse(root)
+pcall(function()
+local ring = Instance.new("Part")
+ring.Name = "FugaPulse"
+ring.Shape = Enum.PartType.Cylinder
+ring.Anchored = true
+ring.CanCollide = false
+ring.CanQuery = false
+ring.CanTouch = false
+ring.Material = Enum.Material.Neon
+ring.Color = Color3.fromRGB(255, 120, 30)
+ring.Size = Vector3.new(0.4, 4, 4)
+ring.CFrame = CFrame.new(root.Position - Vector3.new(0, 2.8, 0)) * CFrame.Angles(0, 0, math.pi / 2)
+ring.Parent = workspace
+local tw = TweenService:Create(ring, TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+Size = Vector3.new(0.2, 46, 46),
+Transparency = 1,
+})
+tw:Play()
+tw.Completed:Once(function() ring:Destroy() end)
+task.delay(1.5, function() if ring.Parent then ring:Destroy() end end)
+end)
+end
+local function buildArrow()
+if arrow and arrow.part.Parent then return arrow end
+local ok, made = pcall(function()
+local part = Instance.new("Part")
+part.Name = "FugaArrow"
+part.Anchored = true
+part.CanCollide = false
+part.CanQuery = false
+part.CanTouch = false
+part.Transparency = 1
+part.Size = Vector3.new(0.2, 0.2, 0.2)
+local function att(name, z)
+local a = Instance.new("Attachment")
+a.Name = name
+a.Position = Vector3.new(0, 0, z)
+a.Parent = part
+return a
+end
+local aT, aS, aP = att("Tail", 0), att("ShaftEnd", -12), att("Tip", -17)
+local function beam(a0, a1, c0, c1, transp)
+local b = Instance.new("Beam")
+b.Attachment0, b.Attachment1 = a0, a1
+b.FaceCamera = true
+b.LightEmission = 1
+b.LightInfluence = 0
+b.Segments = 1
+b.Color = ColorSequence.new(c0, c1)
+b.Transparency = NumberSequence.new(transp)
+b.Enabled = false
+b.Parent = part
+return b
+end
+local white, hot, orange, red = Color3.fromRGB(255, 250, 225), Color3.fromRGB(255, 190, 80), Color3.fromRGB(255, 110, 25), Color3.fromRGB(190, 20, 10)
+local a = {
+part = part, aT = aT, aS = aS, aP = aP,
+glow = beam(aT, aS, red, orange, 0.55),
+shaft = beam(aT, aS, orange, white, 0),
+headGlow = beam(aS, aP, orange, red, 0.5),
+head = beam(aS, aP, white, white, 0),
+}
+a.bow = {}
+a.bowBeams = {}
+for i = 1, 7 do a.bow[i] = att("Bow" .. i, 0) end
+for i = 1, 6 do
+table.insert(a.bowBeams, beam(a.bow[i], a.bow[i + 1], red, hot, 0.1))
+table.insert(a.bowBeams, beam(a.bow[i], a.bow[i + 1], orange, red, 0.55))
+end
+a.stringL = beam(a.bow[1], aT, white, white, 0.15)
+a.stringR = beam(aT, a.bow[7], white, white, 0.15)
+local fire = Instance.new("ParticleEmitter")
+fire.Texture = FIRE_TEX
+fire.LightEmission = 1
+fire.Rate = 0
+fire.Lifetime = NumberRange.new(0.4, 0.9)
+fire.Speed = NumberRange.new(2, 8)
+fire.SpreadAngle = Vector2.new(180, 180)
+fire.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 2.4), NumberSequenceKeypoint.new(1, 0) })
+fire.Color = ColorSequence.new(hot, red)
+fire.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
+fire.Parent = aT
+a.fire = fire
+part.Parent = workspace
+return a
+end)
+if ok then arrow = made end
+return arrow
+end
+local function arrowVisible(v)
+if not arrow then return end
+pcall(function()
+arrow.glow.Enabled = v arrow.shaft.Enabled = v arrow.headGlow.Enabled = v arrow.head.Enabled = v
+arrow.stringL.Enabled = v arrow.stringR.Enabled = v
+for _, b in ipairs(arrow.bowBeams) do b.Enabled = v end
+if not v then arrow.fire.Rate = 0 end
+end)
+end
+local function updateArrow(root)
+if arrowState == "idle" then
+if arrow then arrowVisible(false) end
+return
+end
+local a = buildArrow()
+if not a then return end
+local now = os.clock()
+local origin = root.Position + Vector3.new(0, 8, 0)
+local center, dir, scale, wm
+if arrowState == "charge" then
+local g = math.clamp((now - arrowT) / 0.55, 0, 1)
+scale = 1 - (1 - g) ^ 3
+local aim = mouse.Hit.Position - origin
+dir = aim.Magnitude > 1 and aim.Unit or root.CFrame.LookVector
+center = origin + dir * 1.5
+lastDir, lastCenter = dir, center
+wm = 1 + math.sin(now * 30) * 0.07
+else
+local t = (now - arrowT) / 0.4
+if t >= 1 then
+arrowState = "idle"
+arrowVisible(false)
+return
+end
+dir = lastDir
+center = lastCenter + lastDir * (190 * (now - arrowT))
+scale = 1
+wm = 1 - t
+end
+arrowVisible(true)
+local m = (0.3 + 0.7 * scale) * wm
+pcall(function()
+a.part.CFrame = CFrame.lookAt(center, center + dir)
+local draw = arrowState == "charge" and (1 - scale) * 3 or 0 -- the string is drawn back while it forms
+a.aT.Position = Vector3.new(0, 0, 2.5 * scale + draw)
+a.aS.Position = Vector3.new(0, 0, -12 * scale)
+a.aP.Position = Vector3.new(0, 0, -17 * scale)
+a.shaft.Width0, a.shaft.Width1 = 1 * m, 1 * m
+a.glow.Width0, a.glow.Width1 = 2.8 * m, 2.8 * m
+a.head.Width0, a.head.Width1 = 4.2 * m, 0
+a.headGlow.Width0, a.headGlow.Width1 = 7 * m, 0
+for i = 1, 7 do
+local k = (i - 4) / 3
+a.bow[i].Position = Vector3.new(k * 7 * scale, 0, (-8 + 6.5 * k * k) * scale)
+end
+local bw = 0.8 * m
+for i, b in ipairs(a.bowBeams) do
+b.Width0, b.Width1 = bw * (i % 2 == 1 and 1 or 2.6), bw * (i % 2 == 1 and 1 or 2.6)
+end
+a.stringL.Width0, a.stringL.Width1 = 0.3 * m, 0.3 * m
+a.stringR.Width0, a.stringR.Width1 = 0.3 * m, 0.3 * m
+a.fire.Rate = 60 * scale * wm
+end)
+end
+local SoundService = game:GetService("SoundService")
+local Debris = game:GetService("Debris")
+local function playSound(id, vol, speed)
+if not CFG.sound then return end
+pcall(function()
+local snd = Instance.new("Sound")
+snd.SoundId = id
+snd.Volume = vol
+snd.PlaybackSpeed = speed or 1
+snd.Parent = SoundService
+snd:Play()
+Debris:AddItem(snd, 8)
+end)
+end
+local S_BASS, S_BOOM, S_WHOOSH = "rbxasset://sounds/bass.wav", "rbxasset://sounds/impact_explosion_03.mp3", "rbxasset://sounds/Rocket whoosh 01.wav"
+local S_LAUNCH, S_SLASH, S_THUNDER = "rbxasset://sounds/Launching rocket.wav", "rbxasset://sounds/swordslash.wav", "rbxasset://sounds/HalloweenThunder.wav"
+local impacting = false
+local function playImpact()
+if not CFG.impact or impacting then return end
+impacting = true
+task.spawn(function()
+pcall(function()
+local gui = Instance.new("ScreenGui")
+gui.Name = "FugaImpact"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder = 900
+local f = Instance.new("Frame")
+f.Size = UDim2.fromScale(1, 1)
+f.BackgroundColor3 = Color3.new(1, 1, 1)
+f.BorderSizePixel = 0
+f.ClipsDescendants = true
+f.Parent = gui
+local lines = {}
+for i = 0, 17 do -- speed lines radiating from the middle
+local l = Instance.new("Frame")
+l.AnchorPoint = Vector2.new(0.5, 0.5)
+l.Position = UDim2.fromScale(0.5, 0.5)
+l.Size = UDim2.new(0, 2600, 0, 2 + (i * 7 % 5) * 3)
+l.Rotation = i * 10 + (i % 2) * 3
+l.BackgroundColor3 = Color3.new(0, 0, 0)
+l.BorderSizePixel = 0
+l.ZIndex = 2
+l.Parent = f
+table.insert(lines, l)
+end
+local hole = Instance.new("Frame") -- keeps the middle clear so the lettering reads
+hole.AnchorPoint = Vector2.new(0.5, 0.5)
+hole.Position = UDim2.fromScale(0.5, 0.5)
+hole.Size = UDim2.fromOffset(300, 300)
+hole.BackgroundTransparency = 1
+hole.ZIndex = 3
+hole.Parent = f
+local txt = Instance.new("TextLabel")
+txt.AnchorPoint = Vector2.new(0.5, 0.5)
+txt.Position = UDim2.fromScale(0.5, 0.5)
+txt.Size = UDim2.fromScale(0.9, 0.34)
+txt.BackgroundTransparency = 1
+txt.Text = "FUGA"
+txt.Font = Enum.Font.GothamBlack
+txt.TextScaled = true
+txt.TextColor3 = Color3.fromRGB(235, 20, 20)
+txt.TextStrokeColor3 = Color3.new(1, 1, 1)
+txt.TextStrokeTransparency = 0
+txt.Rotation = -6
+txt.ZIndex = 5
+txt.Visible = false
+txt.Parent = f
+gui.Parent = lp:WaitForChild("PlayerGui")
+local cam = workspace.CurrentCamera
+local fov0 = cam.FieldOfView
+pcall(function() TweenService:Create(cam, TweenInfo.new(0.07, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { FieldOfView = fov0 + 10 }):Play() end)
+local function paint(bg, lineColor, showText)
+f.BackgroundColor3 = bg
+for _, l in ipairs(lines) do l.BackgroundColor3 = lineColor end
+txt.Visible = showText
+end
+paint(Color3.new(1, 1, 1), Color3.new(0, 0, 0), false)   -- 1: white, black lines
+task.wait(0.045)
+paint(Color3.new(0, 0, 0), Color3.new(1, 1, 1), true)    -- 2: black, white lines, red lettering
+task.wait(0.06)
+paint(Color3.fromRGB(190, 12, 12), Color3.new(0, 0, 0), false) -- 3: red, black lines
+task.wait(0.05)
+pcall(function() TweenService:Create(cam, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { FieldOfView = fov0 }):Play() end)
+for _, l in ipairs(lines) do l.Visible = false end
+local tw = TweenService:Create(f, TweenInfo.new(0.22, Enum.EasingStyle.Quad), { BackgroundTransparency = 1 })
+tw:Play()
+tw.Completed:Wait()
+gui:Destroy()
+end)
+impacting = false
+end)
+end
+local cine = nil
+local function cineOff(instant)
+local c = cine
+if not c then return end
+cine = nil
+pcall(function()
+if instant then
+c.gui:Destroy()
+c.cc:Destroy()
+return
+end
+local info = TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+TweenService:Create(c.top, info, { Size = UDim2.new(1, 0, 0, 0) }):Play()
+TweenService:Create(c.bottom, info, { Size = UDim2.new(1, 0, 0, 0) }):Play()
+TweenService:Create(c.sub, info, { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+TweenService:Create(c.cc, info, { TintColor = Color3.new(1, 1, 1), Saturation = 0, Contrast = 0, Brightness = 0 }):Play()
+task.delay(0.5, function()
+pcall(function() c.gui:Destroy() end)
+pcall(function() c.cc:Destroy() end)
+end)
+end)
+end
+local function cineOn()
+if not CFG.cinematic or cine then return end
+pcall(function()
+local gui = Instance.new("ScreenGui")
+gui.Name = "FugaCine"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder = 800
+local function bar(anchorY, posY)
+local b = Instance.new("Frame")
+b.AnchorPoint = Vector2.new(0, anchorY)
+b.Position = UDim2.fromScale(0, posY)
+b.Size = UDim2.new(1, 0, 0, 0)
+b.BackgroundColor3 = Color3.new(0, 0, 0)
+b.BorderSizePixel = 0
+b.Parent = gui
+return b
+end
+local top, bottom = bar(0, 0), bar(1, 1)
+local sub = Instance.new("TextLabel")
+sub.AnchorPoint = Vector2.new(0.5, 1)
+sub.Position = UDim2.new(0.5, 0, 0.86, 0)
+sub.Size = UDim2.new(0.8, 0, 0, 46)
+sub.BackgroundTransparency = 1
+sub.Text = ""
+sub.Font = Enum.Font.GothamBlack
+sub.TextSize = 34
+sub.TextColor3 = Color3.fromRGB(255, 70, 40)
+sub.TextStrokeColor3 = Color3.new(0, 0, 0)
+sub.TextStrokeTransparency = 0
+sub.Parent = gui
+local cc = Instance.new("ColorCorrectionEffect")
+cc.Name = "FugaTint"
+cc.Parent = game:GetService("Lighting")
+gui.Parent = lp:WaitForChild("PlayerGui")
+local info = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+TweenService:Create(top, info, { Size = UDim2.new(1, 0, 0.1, 0) }):Play()
+TweenService:Create(bottom, info, { Size = UDim2.new(1, 0, 0.1, 0) }):Play()
+TweenService:Create(cc, info, { TintColor = Color3.fromRGB(255, 205, 190), Saturation = -0.3, Contrast = 0.22, Brightness = -0.05 }):Play()
+local mine = { gui = gui, top = top, bottom = bottom, sub = sub, cc = cc }
+cine = mine
+task.spawn(function()
+local line = "Kai."
+for i = 1, #line do
+if cine ~= mine then return end
+sub.Text = line:sub(1, i)
+task.wait(0.07)
+end
+task.wait(0.35)
+local line2 = "FUGA."
+sub.TextSize = 44
+for i = 1, #line2 do
+if cine ~= mine then return end
+sub.Text = line2:sub(1, i)
+task.wait(0.06)
+end
+end)
+end)
+end
+cineCleanup = function() cineOff(true) end
+local function sayChat(text)
+pcall(function()
+local TCS = game:GetService("TextChatService")
+if TCS.ChatVersion == Enum.ChatVersion.TextChatService then
+local ch = TCS:FindFirstChild("TextChannels") and TCS.TextChannels:FindFirstChild("RBXGeneral")
+if ch then ch:SendAsync(text) end
+else
+local ev = ReplicatedStorage:FindFirstChild("DefaultChatSystemChatEvents")
+local r = ev and ev:FindFirstChild("SayMessageRequest")
+if r then r:FireServer(text, "All") end
+end
+end)
+end
+local function pressEffects()
+if CFG.chat and os.clock() - lastChat > 6 then
+lastChat = os.clock()
+task.spawn(function() sayChat("Kai.") task.wait(0.9) sayChat("FUGA.") end)
+end
+playSound(S_BASS, 1.5, 0.55)
+playSound(S_BOOM, 0.9, 0.7)
+playSound(S_WHOOSH, 0.5, 0.55)
+if CFG.voiceId and CFG.voiceId ~= "" then playSound(CFG.voiceId, 2, 1) end -- your own audio id for a voice line, if you set one
+playImpact()
+cineOn()
+end
+local function releaseEffects()
+playSound(S_LAUNCH, 0.9, 0.8)
+playSound(S_SLASH, 1, 0.5)
+playSound(S_THUNDER, 0.5, 1.1)
+cineOff()
+end
+local function updateFx(root, charge)
+local part = ensureBase()
+if not part then return end
+pcall(function()
+part.CFrame = CFrame.new(root.Position - Vector3.new(0, 2.9, 0))
+local embers, light = part:FindFirstChild("Embers"), part:FindFirstChild("Glow")
+if embers then embers.Rate = 25 + charge * 150 end
+local col = part:FindFirstChild("Column")
+if col then
+col.CFrame = part.CFrame
+local flame = col:FindFirstChild("Flame")
+if flame then flame.Rate = 8 + charge * 120 end
+end
+if light then light.Brightness = 1.2 + charge * 4.5 + math.sin(os.clock() * 9) * 0.3 end
+end)
+end
+local armsFree = false
+local function driveArms(k)
+local c = char()
+local torso = c and c:FindFirstChild("Torso")
+if not torso then return end
+local sides = { { "Right Shoulder", "Right Arm", POSE_R }, { "Left Shoulder", "Left Arm", POSE_L } }
+if k > 0.02 and CFG.pose and CFG.detach then
+for _, sd in ipairs(sides) do
+local sh, arm = torso:FindFirstChild(sd[1]), c:FindFirstChild(sd[2])
+if sh and arm and sh:IsA("JointInstance") then
+if sh.Enabled then sh.Enabled = false end
+arm.CFrame = torso.CFrame * sh.C0 * CFrame.Angles(0, 0, sd[3] * k) * sh.C1:Inverse()
+arm.AssemblyLinearVelocity = Vector3.zero
+arm.AssemblyAngularVelocity = Vector3.zero
+end
+end
+armsFree = true
+elseif armsFree then
+armsFree = false
+for _, sd in ipairs(sides) do
+local sh = torso:FindFirstChild(sd[1])
+if sh and sh:IsA("JointInstance") then sh.Enabled = true end
+end
+end
+end
+local function releaseAll()
+pcall(driveArms, 0)
+dropFx()
+for tool in pairs(state) do restoreOne(tool) end
+local bp = lp:FindFirstChild("Backpack")
+local c = char()
+for tool in pairs(adopted) do
+if tool.Parent == c and bp then tool.Parent = bp end
+end
+table.clear(adopted)
+end
+local function setOn(v)
+v = v and true or false
+if v == on then return end
+on = v
+if not on then spraying = false sprayId += 1 arrowState = "idle" cineOff() end
+if on then
+startT = os.clock()
+spinAngle = 0
+toast("Fuga. Hold the mouse button to spray the fire where you aim")
+else
+chargeStart = nil
+releaseAll()
+toast("Fuga ring OFF")
+end
+end
+local function aimIsSafe()
+local c = char()
+local root = c and c:FindFirstChild("HumanoidRootPart")
+if not root then return false end
+local ok, d = pcall(function() return (mouse.Hit.Position - root.Position).Magnitude end)
+if not ok then return true end
+if d >= CFG.safeDistance then return true end
+if os.clock() - lastWarn > 1.5 then
+lastWarn = os.clock()
+toast("Aim farther away. That spot is too close and would burn you")
+end
+return false
+end
+local function volley()
+if volleying then return end
+local c = char()
+local list = molotovsIn(c)
+if #list == 0 then return end
+volleying = true
+chargeStart = os.clock()
+task.delay(CFG.chargeTime, function()
+chargeStart = nil
+local now = aimIsSafe() and molotovsIn(char()) or {}
+for i, tool in ipairs(now) do
+task.delay((i - 1) * CFG.gap, function()
+if tool.Parent then
+markAim(tool)
+pcall(function() tool:Activate() end)
+end
+end)
+end
+task.delay(#now * CFG.gap + 1.6, function() volleying = false end)
+end)
+end
+local function haveMolotov()
+for _, t in ipairs(molotovsIn(char())) do
+if not fired[t] then return true end
+end
+return false
+end
+local function startSpray()
+if spraying or volleying then return end
+if not haveMolotov() then return end
+spraying = true
+local r0 = char() and char():FindFirstChild("HumanoidRootPart")
+if r0 then pulse(r0) end
+if CFG.arrow then arrowState = "charge" arrowT = os.clock() end
+pressEffects()
+sprayId += 1
+local mine = sprayId
+task.spawn(function()
+while on and spraying and sprayId == mine do
+local nextTool
+for _, t in ipairs(molotovsIn(char())) do
+if not fired[t] then nextTool = t break end
+end
+if nextTool then
+if aimIsSafe() then
+fired[nextTool] = true
+markAim(nextTool)
+pcall(function() nextTool:Activate() end)
+end
+elseif #molotovsIn(char()) == 0 then
+break -- the last Molotov has been thrown
+end
+task.wait(CFG.sprayGap)
+end
+if sprayId == mine and spraying then
+spraying = false
+if arrowState == "charge" then arrowState = "launch" arrowT = os.clock() end
+releaseEffects()
+end
+end)
+end
+local function stopSpray()
+local was = spraying
+spraying = false
+sprayId += 1
+if arrowState == "charge" then arrowState = "launch" arrowT = os.clock() end
+if was then releaseEffects() end
+end
+table.insert(conns, UIS.InputBegan:Connect(function(input, processed)
+if input.KeyCode == CFG.key and not processed then setOn(not on) return end
+if processed or not on then return end
+if input.UserInputType == Enum.UserInputType.MouseButton1 then task.defer(startSpray) end
+end))
+table.insert(conns, UIS.InputEnded:Connect(function(input)
+if input.UserInputType == Enum.UserInputType.MouseButton1 then stopSpray() end
+end))
+table.insert(conns, lp.CharacterRemoving:Connect(function()
+table.clear(adopted)
+table.clear(state)
+chargeStart = nil
+volleying = false
+end))
+table.insert(conns, RunService.Stepped:Connect(function()
+if not on or next(state) == nil then return end
+local c = char()
+local torso = c and c:FindFirstChild("Torso")
+local rs = torso and torso:FindFirstChild("Right Shoulder")
+if rs then rs.Transform = CFrame.new() end
+if CFG.pose and not CFG.detach and fireBlend > 0.3 and torso then
+local ls = torso:FindFirstChild("Left Shoulder")
+local k = math.clamp((fireBlend - 0.3) / 0.7, 0, 1)
+if rs then rs.Transform = CFrame.Angles(0, 0, POSE_R * k) end
+if ls then ls.Transform = CFrame.Angles(0, 0, POSE_L * k) end
+end
+end))
+table.insert(conns, RunService.RenderStepped:Connect(function(dt)
+if not on then return end
+local c = char()
+local root = c and c:FindFirstChild("HumanoidRootPart")
+local hum = c and c:FindFirstChildOfClass("Humanoid")
+if not root or not hum or hum.Health <= 0 then return end
+if CFG.arrow then pcall(updateArrow, root) end
+local now = os.clock()
+if now - lastAdopt > 0.3 then
+lastAdopt = now
+local bp = lp:FindFirstChild("Backpack")
+for _, t in ipairs(molotovsIn(bp)) do
+adopted[t] = true
+t.Parent = c
+end
+end
+local list = molotovsIn(c)
+local n = #list
+pcall(driveArms, (n > 0 and arrowState == "charge") and math.clamp((fireBlend - 0.3) / 0.7, 0, 1) or 0)
+if n == 0 then return end
+for tool in pairs(state) do
+if tool.Parent ~= c then state[tool] = nil end
+end
+local charge = chargeStart and math.clamp((now - chargeStart) / CFG.chargeTime, 0, 1) or (spraying and 0.55 or 0)
+spinAngle += dt * (CFG.spin + charge * charge * 9)
+local grow = math.clamp((now - startT) / 0.7, 0, 1)
+grow = 1 - (1 - grow) * (1 - grow)
+local radius = math.max(CFG.minRadius, n * CFG.spacing / (2 * math.pi)) * grow * (1 - charge * 0.25)
+local height = CFG.height * (0.35 + 0.65 * grow) + charge * 1.2
+local firing = arrowState == "charge"
+fireBlend += ((firing and 1 or 0) - fireBlend) * math.min(1, dt * 9)
+local origin = root.Position + Vector3.new(0, 8, 0)
+local aimv = mouse.Hit.Position - origin
+local aimDir = aimv.Magnitude > 1 and aimv.Unit or root.CFrame.LookVector
+local right = aimDir:Cross(Vector3.yAxis)
+if right.Magnitude < 0.05 then right = root.CFrame.RightVector end
+right = right.Unit
+local up2 = right:Cross(aimDir).Unit
+local discCenter = origin + aimDir * 11
+local discRadius = math.max(4.5, n * 1.15 / (2 * math.pi))
+for i, tool in ipairs(list) do
+local g = gripFor(tool)
+if g then
+local handle = g.Part1
+if not state[tool] or state[tool].grip ~= g then
+restoreOne(tool)
+state[tool] = { grip = g, c0 = g.C0, part0 = g.Part0, handle = handle, massless = handle.Massless, canCollide = handle.CanCollide }
+handle.Massless = true
+handle.CanCollide = false
+end
+local a = spinAngle + (i - 1) * (2 * math.pi / n)
+local out = Vector3.new(math.cos(a), 0, math.sin(a))
+local bob = math.sin(now * 2.4 + i * 1.7) * CFG.bob
+local pos = root.Position + out * radius + Vector3.new(0, height - 3 + bob, 0)
+local lean = math.rad(CFG.tilt)
+local dir = out * math.sin(lean) + Vector3.new(0, math.cos(lean), 0)
+local form = CFG.formation
+if form == "gyro" then
+local k = (i - 1) % 3
+local m = math.max(1, math.ceil((n - k) / 3))
+local j = (i - 1 - k) // 3
+local R = math.max(5.5, m * 1.7 / (2 * math.pi)) * grow
+local ang = spinAngle * (k % 2 == 0 and 1.3 or -1.3) + j * 2 * math.pi / m
+local tilt = k == 0 and CFrame.new() or (k == 1 and CFrame.Angles(math.rad(62), 0, 0) or CFrame.Angles(0, 0, math.rad(62)))
+local rot = CFrame.Angles(0, spinAngle * 0.35, 0) * tilt
+local off = rot:VectorToWorldSpace(Vector3.new(math.cos(ang), 0, math.sin(ang))) * R
+pos = root.Position + Vector3.new(0, height * 0.55 + bob, 0) + off
+dir = off.Magnitude > 0.01 and off.Unit or dir
+elseif form == "wings" then
+local s2 = (i % 2 == 0) and 1 or -1
+local kk = (i - 1) // 2
+local cnt = math.max(1, s2 == 1 and n // 2 or math.ceil(n / 2))
+local f = cnt > 1 and kk / (cnt - 1) or 0.5
+local flat = root.CFrame.LookVector * Vector3.new(1, 0, 1)
+if flat.Magnitude < 0.01 then flat = Vector3.new(0, 0, -1) end
+local back = -flat.Unit
+local rv = root.CFrame.RightVector
+local ang2 = math.rad(12 + f * 68) + math.sin(now * 2.2) * 0.14 * (0.4 + f)
+local d = (rv * s2 * math.cos(ang2) + Vector3.new(0, math.sin(ang2), 0) + back * 0.3).Unit
+local len = (4.2 + (1 - f) * 3.4) * grow
+pos = root.Position + Vector3.new(0, 2.6, 0) + back * 1.1 + d * len
+dir = d
+elseif form == "halo" then
+local R = math.max(3, n * 1.5 / (2 * math.pi)) * grow
+local ang = spinAngle * 2.2 + (i - 1) * 2 * math.pi / n
+local o = Vector3.new(math.cos(ang), 0, math.sin(ang))
+pos = root.Position + Vector3.new(0, 6.6 + grow * 1.4 + bob, 0) + o * R
+dir = (Vector3.new(0, 1, 0) + o * 0.3).Unit
+end
+local prev = smoothPos[tool]
+if prev then pos = prev:Lerp(pos, math.min(1, dt * 10)) end
+smoothPos[tool] = pos
+if fireBlend > 0.002 then
+local da = spinAngle * 1.4 + (i - 1) * (2 * math.pi / n)
+local discPos = discCenter + right * math.cos(da) * discRadius + up2 * math.sin(da) * discRadius
+pos = pos:Lerp(discPos, fireBlend)
+dir = dir:Lerp(aimDir, fireBlend)
+if dir.Magnitude < 0.01 then dir = aimDir end
+end
+local desired = CFrame.lookAt(pos, pos + dir) * CFG.faceOffset
+if CFG.detach then
+if g.Enabled then g.Enabled = false end
+handle.CFrame = desired
+handle.AssemblyLinearVelocity = Vector3.zero
+handle.AssemblyAngularVelocity = Vector3.zero
+else
+if not g.Enabled then g.Enabled = true end
+g.C0 = g.Part0.CFrame:Inverse() * desired * g.C1
+end
+dressBottle(tool, handle)
+hookTool(tool)
+end
+end
+updateFx(root, charge)
+end))
+getgenv().FugaRing = {
+cfg = CFG,
+set = setOn,
+isOn = function() return on end,
+release = function() task.spawn(volley) end,
+nextFormation = function()
+local idx = 1
+for k, v in ipairs(FORMS) do if v == CFG.formation then idx = k end end
+CFG.formation = FORMS[idx % #FORMS + 1]
+return CFG.formation
+end,
+preview = function()
+if not on or not haveMolotov() then toast("Hold a Molotov first (turn the ring on with Molotovs in your backpack)") return end
+arrowState = "charge"
+arrowT = os.clock()
+pressEffects()
+task.delay(1.8, function()
+if arrowState == "charge" and not spraying then arrowState = "launch" arrowT = os.clock() releaseEffects() end
+end)
+end,
+stop = function()
+on = false
+for _, c in ipairs(conns) do c:Disconnect() end
+table.clear(conns)
+releaseAll()
+getgenv().FugaRing = nil
+end,
+}
+table.insert(stops, function() if getgenv().FugaRing then getgenv().FugaRing.stop() end end)
+end)
 run("Shop", function()
 local CFG = {
 key = Enum.KeyCode.P, -- opens the pawn / weapon shop
@@ -995,6 +1884,7 @@ key = Enum.KeyCode.U,
 confirm = true,     -- press twice. Set false to sell instantly with one press (careful!)
 confirmWindow = 5,  -- seconds you have to press the second time
 keepGuns = false,   -- true = never sell guns (anything with a FireEvent)
+goKey = Enum.KeyCode.B, -- walks you to the pawn shop, sells there, and walks back to the AFK weapon walk if it was on
 }
 local function collect()
 local list, total = {}, 0
@@ -1016,14 +1906,14 @@ return list, total
 end
 local armedUntil = 0
 local busy = false
-local function press()
+local function press(force)
 if busy then return end
 local list, total = collect()
 if #list == 0 then
 toast("Nothing to sell (no items the pawn shop buys)")
 return
 end
-if CFG.confirm and os.clock() > armedUntil then
+if CFG.confirm and force ~= true and os.clock() > armedUntil then
 armedUntil = os.clock() + CFG.confirmWindow
 toast(("Sell %d item(s) for about %d Yen? Press U again to confirm"):format(#list, total))
 return
@@ -1042,13 +1932,56 @@ toast("Nothing was paid. Stand at the pawn shop with its sell screen open, then 
 end
 busy = false
 end
+local going = false
+local function goSell()
+if going then going = false return end
+local list, total = collect()
+if #list == 0 then
+toast("Nothing to sell (no items the pawn shop buys)")
+return
+end
+local B = getgenv().BringGuns
+local c = lp.Character
+local root = c and c:FindFirstChild("HumanoidRootPart")
+if not B or not B.walkTo or not root then return end
+local spot, best
+for _, d in ipairs(workspace:GetChildren()) do
+if d.Name:lower():find("pawn shop button", 1, true) then
+local part = d:IsA("BasePart") and d or d:FindFirstChildWhichIsA("BasePart", true)
+if part then
+local dist = (part.Position - root.Position).Magnitude
+if not best or dist < best then spot, best = part.Position, dist end
+end
+end
+end
+if not spot then toast("Could not find the pawn shop") return end
+local resume = B.autoOn and B.autoOn()
+if resume then B.setAuto(false) end
+going = true
+toast(("Walking to the pawn shop (%dm) to sell %d item(s), about %d Yen. Move or press %s to cancel"):format(math.floor(best), #list, total, CFG.goKey.Name))
+local res = B.walkTo(spot, 5, 90, function() return not going end)
+if res == "arrived" and going then
+local o = getgenv().OpenShop
+if o then o.run(o.cfg.shops[1]) end
+task.wait(1.5)
+press(true)
+elseif res == "stopped" then
+toast("Cancelled")
+else
+toast("Could not reach the pawn shop. Try again or walk the rest")
+end
+going = false
+if resume and B.setAuto then B.setAuto(true) end
+end
 local conn = UIS.InputBegan:Connect(function(input, processed)
 if processed then return end
 if input.KeyCode == CFG.key then task.spawn(press) end
+if input.KeyCode == CFG.goKey then task.spawn(goSell) end
 end)
 getgenv().SellAll = {
 cfg = CFG,
 run = function() task.spawn(press) end,
+goSell = function() task.spawn(goSell) end,
 stop = function()
 conn:Disconnect()
 getgenv().SellAll = nil
@@ -1062,6 +1995,7 @@ key = Enum.KeyCode.K,
 skipNearPlayers = 60, -- studs; weapons with another player this close are left alone (0 = never skip)
 inFront = 7,          -- studs in front of you where the weapons are placed
 spread = 2.5,         -- gap between weapons
+silentKey = Enum.KeyCode.V, -- switches the silent pickup on / off
 pickupKey = Enum.KeyCode.N, -- brings the weapon pickups from the spawn points to you
 guns = true,          -- which kinds of pickup to bring
 melee = true,
@@ -1115,6 +2049,48 @@ else
 toast("Brought " .. n .. ": " .. table.concat(names, ", "))
 end
 busy = false
+end
+local silentOn = false
+local function grabLoose()
+local c = lp.Character
+local root = c and c:FindFirstChild("HumanoidRootPart")
+local hum = c and c:FindFirstChildOfClass("Humanoid")
+if not root or not hum or hum.Health <= 0 or not firetouchinterest then return 0 end
+local mine = {}
+for _, d in ipairs(workspace:GetChildren()) do
+if d:IsA("Tool") then
+local h = d:FindFirstChild("Handle")
+if h and h:IsA("BasePart") and not nearOtherPlayer(h.Position) then
+table.insert(mine, { tool = d, handle = h })
+end
+end
+end
+if #mine == 0 then return 0 end
+for _, m in ipairs(mine) do pcall(firetouchinterest, root, m.handle, 0) end
+task.wait(0.15)
+for _, m in ipairs(mine) do pcall(firetouchinterest, root, m.handle, 1) end
+task.wait(0.4)
+local got, equipped = 0, false
+for _, m in ipairs(mine) do
+if m.tool.Parent ~= workspace then
+got += 1
+if m.tool.Parent == c then equipped = true end
+end
+end
+if equipped then pcall(function() hum:UnequipTools() end) end
+return got
+end
+local function setSilent(v)
+v = v and true or false
+if v == silentOn then return end
+silentOn = v
+if not v then return end
+task.spawn(function()
+while silentOn do
+pcall(grabLoose)
+task.wait(2)
+end
+end)
 end
 local MELEE_WORDS = { "knife", "katana", "sledge", "hammer", "bat", "bokken", "axe", "machete", "sword" }
 local function pickupKindOf(m)
@@ -1256,6 +2232,53 @@ if st == "ok" or st == "failed" then task.wait(0.5) else task.wait(1.5) end
 end
 end)
 end
+local function walkTo(pos, radius, timeout, shouldStop)
+local t0 = os.clock()
+while walking and os.clock() - t0 < 3 do task.wait(0.1) end -- let a walk that was just cancelled finish
+if walking then return "failed" end
+local c = lp.Character
+local root = c and c:FindFirstChild("HumanoidRootPart")
+local hum = c and c:FindFirstChildOfClass("Humanoid")
+if not root or not hum or hum.Health <= 0 then return "failed" end
+walking = true
+walkToken += 1
+local mine = walkToken
+local startedAt = os.clock()
+local function flatDist() return Vector3.new(root.Position.X - pos.X, 0, root.Position.Z - pos.Z).Magnitude end
+local function going()
+return walkToken == mine and hum.Health > 0 and root.Parent ~= nil and os.clock() - startedAt < (timeout or 60)
+and not (shouldStop and shouldStop()) and not userIsSteering()
+end
+local points
+local path = PathfindingService:CreatePath({ AgentRadius = 2, AgentHeight = 5, AgentCanJump = true, AgentCanClimb = true })
+local okPath = pcall(function() path:ComputeAsync(root.Position, pos) end)
+if okPath and path.Status == Enum.PathStatus.Success then
+points = path:GetWaypoints()
+else
+points = { { Position = pos, Action = Enum.PathWaypointAction.Walk } }
+end
+task.wait(0.3)
+for _, wp in ipairs(points) do
+if not going() or flatDist() < radius then break end
+if wp.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end
+hum:MoveTo(wp.Position)
+local w0 = os.clock()
+while going() and os.clock() - w0 < 4 do
+local f = Vector3.new(root.Position.X - wp.Position.X, 0, root.Position.Z - wp.Position.Z).Magnitude
+if f < 3 or flatDist() < radius then break end
+task.wait(0.1)
+end
+end
+if going() and flatDist() >= radius then
+hum:MoveTo(Vector3.new(pos.X, root.Position.Y, pos.Z))
+local w1 = os.clock()
+while going() and os.clock() - w1 < 4 and flatDist() >= radius do task.wait(0.1) end
+end
+local result = flatDist() < radius + 0.5 and "arrived" or ((walkToken ~= mine or userIsSteering() or (shouldStop and shouldStop())) and "stopped" or "failed")
+hum:MoveTo(root.Position)
+walking = false
+return result
+end
 local function runPickups()
 setAuto(not autoOn)
 end
@@ -1267,16 +2290,22 @@ local conn = UIS.InputBegan:Connect(function(input, processed)
 if processed then return end
 if input.KeyCode == CFG.key then task.spawn(run) end
 if input.KeyCode == CFG.pickupKey then task.spawn(runPickups) end
+if input.KeyCode == CFG.silentKey then setSilent(not silentOn) end
 end)
 getgenv().BringGuns = {
 cfg = CFG,
 run = function() task.spawn(run) end,
 runPickups = function() task.spawn(runPickups) end,
 walkNearest = function() task.spawn(walkNearest) end,
+grabNow = function() task.spawn(function() pcall(grabLoose) end) end,
+setSilent = setSilent,
+silentOn = function() return silentOn end,
+walkTo = walkTo,
 setAuto = function(v) task.spawn(setAuto, v) end,
 autoOn = function() return autoOn end,
 stop = function()
 autoOn = false
+silentOn = false
 walkToken += 1
 conn:Disconnect()
 getgenv().BringGuns = nil
@@ -2693,13 +3722,41 @@ addSlider(gate, "Guns per row", 2, 12, 1, function() local g = api("FloatGuns") 
 addToggle(gate, "Reload all guns together", function() local g = api("FloatGuns") return g and g.cfg.reloadAll end, function(v) local g = api("FloatGuns") if g then g.cfg.reloadAll = v end end)
 addToggle(gate, "No camera recoil (screen shake)", function() local g = api("FloatGuns") return g and g.cfg.noRecoil end, function(v) local g = api("FloatGuns") if g then g.setNoRecoil(v) end end)
 infoLabel(gate, "Takes effect when you equip a gun. If a gun ever will not fire, turn this off, rejoin, and tell the owner.", 44)
+local fuga = newTab("Fuga")
+addToggle(fuga, "Fuga ring (Molotovs)", function() local f = api("FugaRing") return f and f.isOn and f.isOn() end, function(v) local f = api("FugaRing") if f then f.set(v) end end)
+addKeybind(fuga, "Toggle key", function() local f = api("FugaRing") return f and f.cfg.key or Enum.KeyCode.Z end, function(k) local f = api("FugaRing") if f then f.cfg.key = k end end)
+addSlider(fuga, "Spray speed (throws per second)", 2, 15, 1, function() local f = api("FugaRing") return f and math.floor(1 / f.cfg.sprayGap + 0.5) or 8 end, function(v) local f = api("FugaRing") if f then f.cfg.sprayGap = 1 / v end end)
+addButton(fuga, "Throw the whole ring at once", function() local f = api("FugaRing") if f then f.release() end end)
+addToggle(fuga, "Flame arrow (visual)", function() local f = api("FugaRing") return f and f.cfg.arrow end, function(v) local f = api("FugaRing") if f then f.cfg.arrow = v end end)
+addToggle(fuga, "Cinematic bars, tint and chant (visual)", function() local f = api("FugaRing") return f and f.cfg.cinematic end, function(v) local f = api("FugaRing") if f then f.cfg.cinematic = v end end)
+addToggle(fuga, "Sound effects", function() local f = api("FugaRing") return f and f.cfg.sound end, function(v) local f = api("FugaRing") if f then f.cfg.sound = v end end)
+addToggle(fuga, "Impact frame flash (visual)", function() local f = api("FugaRing") return f and f.cfg.impact end, function(v) local f = api("FugaRing") if f then f.cfg.impact = v end end)
+addButton(fuga, "Next formation (ring, gyro, wings, halo)", function()
+local f = api("FugaRing")
+if f then toast("Formation: " .. f.nextFormation()) end
+end)
+addToggle(fuga, "Arm pose while spraying (others see it)", function() local f = api("FugaRing") return f and f.cfg.pose end, function(v) local f = api("FugaRing") if f then f.cfg.pose = v end end)
+addToggle(fuga, "Show bottles and arms to other players", function() local f = api("FugaRing") return f and f.cfg.detach end, function(v) local f = api("FugaRing") if f then f.cfg.detach = v end end)
+addToggle(fuga, "Say Kai. / FUGA. in chat (everyone sees it)", function() local f = api("FugaRing") return f and f.cfg.chat end, function(v) local f = api("FugaRing") if f then f.cfg.chat = v end end)
+addButton(fuga, "Preview the look (throws nothing)", function() local f = api("FugaRing") if f then f.preview() end end)
+addSlider(fuga, "Safe distance (studs)", 10, 80, 1, function() local f = api("FugaRing") return f and f.cfg.safeDistance or 25 end, function(v) local f = api("FugaRing") if f then f.cfg.safeDistance = v end end)
+addSlider(fuga, "Ring height", 3, 14, 0.5, function() local f = api("FugaRing") return f and f.cfg.height or 9 end, function(v) local f = api("FugaRing") if f then f.cfg.height = v end end)
+addSlider(fuga, "Spin speed", 0.5, 5, 0.1, function() local f = api("FugaRing") return f and f.cfg.spin or 1.6 end, function(v) local f = api("FugaRing") if f then f.cfg.spin = v end end)
+addSlider(fuga, "Charge-up (seconds)", 0.1, 1.5, 0.05, function() local f = api("FugaRing") return f and f.cfg.chargeTime or 0.45 end, function(v) local f = api("FugaRing") if f then f.cfg.chargeTime = v end end)
+addSlider(fuga, "Lean outwards (degrees)", 0, 80, 1, function() local f = api("FugaRing") return f and f.cfg.tilt or 40 end, function(v) local f = api("FugaRing") if f then f.cfg.tilt = v end end)
+infoLabel(fuga, "Buy Molotovs at Banmin. With the ring on they float around you in a spinning circle of fire. Hold the left mouse button to spray them one after another like a machine gun, aiming with your cursor. Each Molotov lands where your cursor was when it left the ring. Each throw uses up one Molotov. Separate from the Gate (guns).", 84)
 local items = newTab("Items")
 addButton(items, "Open pawn / weapon shop", function() local o = api("OpenShop") if o then o.run(o.cfg.shops[1]) end end)
 addKeybind(items, "Shop key", function() local o = api("OpenShop") return o and o.cfg.key or Enum.KeyCode.P end, function(k) local o = api("OpenShop") if o then o.cfg.key = k end end)
 addButton(items, "Sell everything", function() local s = api("SellAll") if s then s.run() end end)
+addButton(items, "Go to pawn shop and sell", function() local s = api("SellAll") if s then s.goSell() end end)
+addKeybind(items, "Go-sell key", function() local s = api("SellAll") return s and s.cfg.goKey or Enum.KeyCode.B end, function(k) local s = api("SellAll") if s then s.cfg.goKey = k end end)
 addKeybind(items, "Sell key", function() local s = api("SellAll") return s and s.cfg.key or Enum.KeyCode.U end, function(k) local s = api("SellAll") if s then s.cfg.key = k end end)
 addToggle(items, "Ask before selling", function() local s = api("SellAll") return s and s.cfg.confirm end, function(v) local s = api("SellAll") if s then s.cfg.confirm = v end end)
 addToggle(items, "Keep my guns when selling", function() local s = api("SellAll") return s and s.cfg.keepGuns end, function(v) local s = api("SellAll") if s then s.cfg.keepGuns = v end end)
+addToggle(items, "Silent pickup (grab loose items from anywhere)", function() local b = api("BringGuns") return b and b.silentOn and b.silentOn() end, function(v) local b = api("BringGuns") if b and b.silentOn() ~= v then b.setSilent(v) end end)
+addButton(items, "Grab all loose items now (silent)", function() local b = api("BringGuns") if b then b.grabNow() end end)
+addKeybind(items, "Silent pickup key", function() local b = api("BringGuns") return b and b.cfg.silentKey or Enum.KeyCode.V end, function(k) local b = api("BringGuns") if b then b.cfg.silentKey = k end end)
 addButton(items, "Bring loose weapons", function() local b = api("BringGuns") if b then b.run() end end)
 addKeybind(items, "Bring key", function() local b = api("BringGuns") return b and b.cfg.key or Enum.KeyCode.K end, function(k) local b = api("BringGuns") if b then b.cfg.key = k end end)
 addToggle(items, "Auto-walk to weapons (AFK farm)", function() local b = api("BringGuns") return b and b.autoOn and b.autoOn() end, function(v) local b = api("BringGuns") if b and b.autoOn() ~= v then b.setAuto(v) end end)
@@ -2707,7 +3764,7 @@ addButton(items, "Walk to nearest spawned weapon (once)", function() local b = a
 addKeybind(items, "Auto-walk key", function() local b = api("BringGuns") return b and b.cfg.pickupKey or Enum.KeyCode.N end, function(k) local b = api("BringGuns") if b then b.cfg.pickupKey = k end end)
 addToggle(items, "  Include guns", function() local b = api("BringGuns") return b and b.cfg.guns end, function(v) local b = api("BringGuns") if b then b.cfg.guns = v end end)
 addToggle(items, "  Include melee weapons", function() local b = api("BringGuns") return b and b.cfg.melee end, function(v) local b = api("BringGuns") if b then b.cfg.melee = v end end)
-infoLabel(items, "Selling only works while you stand at the pawn shop. Auto-walk keeps walking you to the next weapon pickup along a real path until you switch it off. The single walk stops when you press it again or move. The game does not allow teleporting.", 58)
+infoLabel(items, "Selling only works while you stand at the pawn shop, so Go to pawn shop and sell walks you there, sells, and goes back to the AFK walk. Auto-walk keeps walking you to the next weapon pickup along a real path until you switch it off. The single walk stops when you press it again or move. The game does not allow teleporting.", 58)
 local shopsTab = newTab("Shops")
 do
 local o = api("OpenShop")
