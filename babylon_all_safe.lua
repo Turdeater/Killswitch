@@ -180,8 +180,9 @@ st.Parent = toastLabel
 end
 
 local toastStamp = 0
-local function toast(text)
+local function toast(text, force)
 print("[Babylon] " .. text)
+if not force and getgenv().__BabylonToasts ~= true then return end
 toastStamp += 1
 local mine = toastStamp
 toastLabel.Text = text
@@ -239,7 +240,8 @@ end
 
 local splash = { active = false, progress = function() end, finish = function(cb) if cb then cb() end end }
 local onIntroDone = function() end
-do
+local SHOW_INTRO = false -- the loading intro is off: nothing appears on the screen until you press RightShift
+if SHOW_INTRO then
 local okIntro, errIntro = pcall(function()
 local t0 = os.clock()
 local root = Instance.new("CanvasGroup")
@@ -466,7 +468,7 @@ end
 end
 
 local loadErrors = {}
-local MODULE_TOTAL = 11
+local MODULE_TOTAL = 12
 local modulesDone = 0
 local function run(name, fn)
 print("[Babylon] loading " .. name)
@@ -4728,6 +4730,708 @@ end,
 table.insert(stops, function() if getgenv().FugaRing then getgenv().FugaRing.stop() end end)
 end)
 
+run("Domain", function()
+local Lighting = game:GetService("Lighting")
+local SoundService = game:GetService("SoundService")
+local Debris = game:GetService("Debris")
+
+local CFG = {
+key = Enum.KeyCode.X,
+tall = true,          -- true: 12 tall metal walls (11 studs high). false: 8 short metal walls (8 studs high)
+domeRadius = 34,      -- size of the void on your screen
+voiceFile = "domain_voice", -- put your own domain_voice.mp3 (or .ogg / .wav) in the executor's workspace folder
+voiceVolume = 2.4,
+soundBase = "https://raw.githubusercontent.com/Turdeater/Killswitch/main/",
+cinematic = true,     -- black bars, flash, kanji and the title card (visual only)
+voidFx = true,        -- the dark star-filled void on your own screen (visual only)
+watch = true,         -- draw the dome around other players who stand inside a closed ring of barriers
+watchRange = 300,
+exitDistance = 7,     -- studs outside the wall where you are put when you leave
+placeTimeout = 1.2,   -- seconds to wait for each wall to show up
+}
+
+local conns = {}
+local active, busy = false, false
+local session = 0
+local stopped = false
+local center = Vector3.zero
+local fx = nil
+local gui = nil
+local rootWasAnchored = nil
+local oldZoom = nil
+local lightSave = nil
+local lightFx = nil
+local remoteDomes = {}
+local shakeAmp, shakeUntil = 0, 0
+
+local function root()
+local c = lp.Character
+return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+local voiceAsset = nil
+local function voiceId()
+if voiceAsset then return voiceAsset end
+if not (isfile and getcustomasset) then return nil end
+local id
+pcall(function()
+for _, ext in ipairs({ ".mp3", ".ogg", ".wav" }) do
+local nm = CFG.voiceFile .. ext
+if isfile(nm) then id = getcustomasset(nm) break end
+end
+end)
+voiceAsset = id
+return id
+end
+local function playVoice(parent, mul)
+local ok, snd = pcall(function()
+local id = voiceId()
+if not id then return nil end
+local sn = Instance.new("Sound")
+sn.SoundId = id
+sn.Volume = CFG.voiceVolume * (mul or 1)
+if parent then
+sn.RollOffMinDistance = 25
+sn.RollOffMaxDistance = 260
+end
+sn.Parent = parent or SoundService
+sn:Play()
+Debris:AddItem(sn, 40)
+return sn
+end)
+return ok and snd or nil
+end
+task.spawn(function()
+if not (isfile and writefile and getcustomasset) then return end
+local have = false
+pcall(function()
+for _, ext in ipairs({ ".mp3", ".ogg", ".wav" }) do
+if isfile(CFG.voiceFile .. ext) then have = true end
+end
+end)
+if have then return end
+local ok, data = pcall(function() return game:HttpGet(CFG.soundBase .. CFG.voiceFile .. ".mp3") end)
+if ok and type(data) == "string" and #data > 2000 and data:sub(1, 3) ~= "404" then
+if pcall(writefile, CFG.voiceFile .. ".mp3", data) then
+voiceAsset = nil
+print("[Babylon] downloaded " .. CFG.voiceFile .. ".mp3")
+end
+end
+end)
+
+local function shake(amp, dur)
+shakeAmp, shakeUntil = amp, os.clock() + dur
+end
+pcall(function() RunService:UnbindFromRenderStep("DomainShake") end)
+RunService:BindToRenderStep("DomainShake", Enum.RenderPriority.Camera.Value + 2, function()
+local left = shakeUntil - os.clock()
+if left > 0 then
+local cam = workspace.CurrentCamera
+local a = shakeAmp * math.min(1, left / 0.35)
+cam.CFrame = cam.CFrame * CFrame.Angles(math.rad((math.random() - 0.5) * a), math.rad((math.random() - 0.5) * a), 0)
+end
+end)
+
+local function groundY(pos)
+local params = RaycastParams.new()
+params.FilterType = Enum.RaycastFilterType.Exclude
+params.FilterDescendantsInstances = { lp.Character }
+local hit = workspace:Raycast(pos + Vector3.new(0, 2, 0), Vector3.new(0, -40, 0), params)
+return hit and hit.Position.Y or nil
+end
+
+local function barrierPos(d)
+local p = d.PrimaryPart
+return p and p.Position or d:GetPivot().Position
+end
+
+local function newPart(parent, size, color, material, shape)
+local p = Instance.new("Part")
+p.Anchored = true
+p.CanCollide = false
+p.CanQuery = false
+p.CanTouch = false
+p.CastShadow = false
+p.Size = size
+p.Color = color
+p.Material = material or Enum.Material.Neon
+if shape then p.Shape = shape end
+p.Parent = parent
+return p
+end
+
+local function dotRing(parent, at, radius, count, size, color)
+local m = Instance.new("Model")
+for i = 1, count do
+local a = i / count * math.pi * 2
+local p = newPart(m, Vector3.new(size, size, size), color, Enum.Material.Neon, Enum.PartType.Ball)
+p.CFrame = CFrame.new(at + Vector3.new(math.cos(a) * radius, 0, math.sin(a) * radius))
+end
+m.WorldPivot = CFrame.new(at)
+m.Parent = parent
+return m
+end
+
+local function buildGui()
+local sg = Instance.new("ScreenGui")
+sg.Name = "DomainUI"
+sg.ResetOnSpawn = false
+sg.IgnoreGuiInset = true
+sg.DisplayOrder = 900
+sg.Parent = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui", 5)
+local g = { gui = sg }
+local function frame(name, z)
+local f = Instance.new("Frame")
+f.Name = name
+f.BorderSizePixel = 0
+f.ZIndex = z
+f.Parent = sg
+return f
+end
+g.tint = frame("Tint", 1)
+g.tint.Size = UDim2.new(1, 0, 1, 0)
+g.tint.BackgroundColor3 = Color3.fromRGB(4, 4, 18)
+g.tint.BackgroundTransparency = 1
+g.top = frame("BarTop", 5)
+g.top.AnchorPoint = Vector2.new(0, 1)
+g.top.Position = UDim2.new(0, 0, 0, 0)
+g.top.Size = UDim2.new(1, 0, 0.13, 0)
+g.top.BackgroundColor3 = Color3.new(0, 0, 0)
+g.bot = frame("BarBottom", 5)
+g.bot.Position = UDim2.new(0, 0, 1, 0)
+g.bot.Size = UDim2.new(1, 0, 0.13, 0)
+g.bot.BackgroundColor3 = Color3.new(0, 0, 0)
+local function label(name, size, z)
+local l = Instance.new("TextLabel")
+l.Name = name
+l.AnchorPoint = Vector2.new(0.5, 0.5)
+l.BackgroundTransparency = 1
+l.Font = Enum.Font.GothamBlack
+l.TextSize = size
+l.TextColor3 = Color3.new(1, 1, 1)
+l.TextTransparency = 1
+l.ZIndex = z
+l.Parent = sg
+local st = Instance.new("UIStroke")
+st.Color = Color3.fromRGB(110, 150, 255)
+st.Thickness = 2
+st.Transparency = 1
+st.Parent = l
+return l, st
+end
+g.kanji, g.kanjiStroke = label("Kanji", 120, 8)
+g.kanji.Position = UDim2.new(0.5, 0, 0.45, 0)
+g.kanji.Size = UDim2.new(1, 0, 0, 160)
+g.sub, g.subStroke = label("Sub", 22, 8)
+g.sub.Font = Enum.Font.GothamBold
+g.sub.Position = UDim2.new(0.5, 0, 0.45, 100)
+g.sub.Size = UDim2.new(1, 0, 0, 30)
+g.flash = frame("Flash", 20)
+g.flash.Size = UDim2.new(1, 0, 1, 0)
+g.flash.BackgroundColor3 = Color3.new(1, 1, 1)
+g.flash.BackgroundTransparency = 1
+return g
+end
+local function guiKill()
+if gui then pcall(function() gui.gui:Destroy() end) gui = nil end
+end
+local function flash(inT, outT, color)
+if not gui then return end
+local f = gui.flash
+f.BackgroundColor3 = color or Color3.new(1, 1, 1)
+f.BackgroundTransparency = 0.05
+task.delay(inT, function()
+if gui and gui.flash == f then tween(f, outT, { BackgroundTransparency = 1 }) end
+end)
+end
+local function showTitle(g, main, sub, hold)
+g.kanji.Text = main
+g.sub.Text = sub or ""
+g.kanji.TextTransparency = 1
+g.kanji.Size = UDim2.new(1.3, 0, 0, 200)
+tween(g.kanji, 0.35, { TextTransparency = 0, Size = UDim2.new(1, 0, 0, 160) }, Enum.EasingStyle.Back)
+tween(g.kanjiStroke, 0.35, { Transparency = 0.2 })
+tween(g.sub, 0.6, { TextTransparency = 0.05 })
+tween(g.subStroke, 0.6, { Transparency = 0.4 })
+task.delay(hold, function()
+if not g.gui.Parent then return end
+tween(g.kanji, 0.7, { TextTransparency = 1 })
+tween(g.kanjiStroke, 0.7, { Transparency = 1 })
+tween(g.sub, 0.7, { TextTransparency = 1 })
+tween(g.subStroke, 0.7, { Transparency = 1 })
+end)
+end
+
+local function lightOn()
+if lightSave then return end
+lightSave = {
+Brightness = Lighting.Brightness,
+Ambient = Lighting.Ambient,
+OutdoorAmbient = Lighting.OutdoorAmbient,
+ExposureCompensation = Lighting.ExposureCompensation,
+FogEnd = Lighting.FogEnd,
+FogStart = Lighting.FogStart,
+FogColor = Lighting.FogColor,
+}
+local atmo = Instance.new("Atmosphere")
+atmo.Name = "DomainAtmo"
+atmo.Density = 0
+atmo.Offset = 0
+atmo.Color = Color3.new(0, 0, 0)
+atmo.Decay = Color3.new(0, 0, 0)
+atmo.Glare = 0
+atmo.Haze = 0
+atmo.Parent = Lighting
+Lighting.FogColor = Color3.new(0, 0, 0)
+Lighting.FogStart = 4
+tween(Lighting, 1.1, {
+Brightness = 0.5,
+Ambient = Color3.fromRGB(80, 82, 135),
+OutdoorAmbient = Color3.fromRGB(80, 82, 135),
+ExposureCompensation = -0.1,
+FogEnd = 70,
+})
+tween(atmo, 1.1, { Density = 0.9, Offset = 1, Haze = 10 })
+local cc = Instance.new("ColorCorrectionEffect")
+cc.Name = "DomainCC"
+cc.Parent = Lighting
+local bl = Instance.new("BloomEffect")
+bl.Name = "DomainBloom"
+bl.Intensity = 0
+bl.Size = 24
+bl.Threshold = 0.95
+bl.Parent = Lighting
+lightFx = { cc = cc, bloom = bl, atmo = atmo }
+tween(cc, 1.1, { Saturation = -0.5, Contrast = 0.2, TintColor = Color3.fromRGB(210, 222, 255) })
+tween(bl, 1.1, { Intensity = 0.7 })
+end
+local function lightOff(instant)
+if not lightSave then return end
+local save, fxs = lightSave, lightFx
+lightSave, lightFx = nil, nil
+local t = instant and 0 or 0.8
+pcall(function() tween(Lighting, t, save) end)
+local function finish()
+if fxs then pcall(function() fxs.cc:Destroy() fxs.bloom:Destroy() fxs.atmo:Destroy() end) end
+end
+if fxs and not instant then
+pcall(function()
+tween(fxs.cc, t, { Saturation = 0, Contrast = 0, TintColor = Color3.new(1, 1, 1) })
+tween(fxs.bloom, t, { Intensity = 0 })
+tween(fxs.atmo, t, { Density = 0, Offset = 0, Haze = 0 })
+end)
+task.delay(t + 0.1, finish)
+else
+finish()
+end
+end
+
+local function buildVoid(at, groundPos, wallR)
+local f = Instance.new("Folder")
+f.Name = "DomainFx"
+f.Parent = workspace
+local R = CFG.domeRadius
+local o = { folder = f, rings = {}, born = os.clock(), at = at }
+local dome = newPart(f, Vector3.new(R * 2, R * 2, R * 2), Color3.new(0, 0, 0), Enum.Material.SmoothPlastic)
+dome.Transparency = 1
+dome.CFrame = CFrame.new(at)
+o.dome = dome
+local stars = Instance.new("ParticleEmitter")
+stars.Rate = 110
+stars.Lifetime = NumberRange.new(5, 9)
+stars.Speed = NumberRange.new(0.2, 1.2)
+stars.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.35), NumberSequenceKeypoint.new(1, 0.35) })
+stars.LightEmission = 1
+stars.LightInfluence = 0
+stars.Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(170, 200, 255))
+stars.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.15, 0.1), NumberSequenceKeypoint.new(0.85, 0.1), NumberSequenceKeypoint.new(1, 1) })
+stars.Shape = Enum.ParticleEmitterShape.Sphere
+stars.ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume
+stars.LockedToPart = false
+stars.Parent = dome
+local streaks = Instance.new("ParticleEmitter")
+streaks.Rate = 26
+streaks.Lifetime = NumberRange.new(1.4, 2.4)
+streaks.Speed = NumberRange.new(26, 46)
+streaks.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.3), NumberSequenceKeypoint.new(1, 0.05) })
+streaks.Squash = NumberSequence.new(-4)
+streaks.LightEmission = 1
+streaks.Color = ColorSequence.new(Color3.fromRGB(140, 190, 255), Color3.fromRGB(190, 150, 255))
+streaks.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.2, 0.2), NumberSequenceKeypoint.new(1, 1) })
+streaks.Shape = Enum.ParticleEmitterShape.Sphere
+streaks.ShapeStyle = Enum.ParticleEmitterShapeStyle.Surface
+streaks.ShapeInOut = Enum.ParticleEmitterShapeInOut.Inward
+streaks.Parent = dome
+local floorY = groundPos.Y
+local function disc(radius, y, color, mat, refl)
+local d = newPart(f, Vector3.new(0.04, radius * 2, radius * 2), color, mat, Enum.PartType.Cylinder)
+d.CFrame = CFrame.new(groundPos.X, floorY + y, groundPos.Z) * CFrame.Angles(0, 0, math.pi / 2)
+if refl then d.Reflectance = refl end
+return d
+end
+disc(R * 0.95, 0.06, Color3.fromRGB(5, 5, 14), Enum.Material.SmoothPlastic, 0.25)
+o.glowRing = disc(wallR + 1.3, 0.12, Color3.fromRGB(150, 190, 255), Enum.Material.Neon)
+disc(wallR - 0.2, 0.18, Color3.fromRGB(5, 5, 14), Enum.Material.SmoothPlastic, 0.25)
+local specs = {
+{ r = 15, n = 44, s = 0.35, tx = 0.0, tz = 0.0, spd = 0.5, col = Color3.fromRGB(200, 225, 255) },
+{ r = 20, n = 52, s = 0.4, tx = 1.0, tz = 0.3, spd = -0.4, col = Color3.fromRGB(150, 175, 255) },
+{ r = 25, n = 60, s = 0.45, tx = -0.8, tz = 0.9, spd = 0.3, col = Color3.fromRGB(190, 160, 255) },
+}
+for _, sp in ipairs(specs) do
+local m = dotRing(f, at, sp.r, sp.n, sp.s, sp.col)
+table.insert(o.rings, { model = m, spec = sp })
+end
+local lt = Instance.new("PointLight")
+lt.Color = Color3.fromRGB(190, 210, 255)
+lt.Range = 26
+lt.Brightness = 1.4
+lt.Parent = dome
+return o
+end
+
+local function voidFrame(now)
+if not fx then return end
+for _, rg in ipairs(fx.rings) do
+local sp = rg.spec
+pcall(function()
+rg.model:PivotTo(CFrame.new(fx.at) * CFrame.Angles(sp.tx + math.sin(now * 0.3) * 0.2, now * sp.spd, sp.tz))
+end)
+end
+if fx.glowRing then
+fx.glowRing.Transparency = 0.15 + math.sin(now * 3) * 0.12
+end
+end
+
+local function endVoid(instant)
+local o = fx
+fx = nil
+lightOff(instant)
+if oldZoom then pcall(function() lp.CameraMaxZoomDistance = oldZoom end) oldZoom = nil end
+if o then
+if instant then
+pcall(function() o.folder:Destroy() end)
+else
+pcall(function()
+for _, e in ipairs(o.dome:GetChildren()) do if e:IsA("ParticleEmitter") then e.Enabled = false end end
+end)
+task.delay(0.8, function() pcall(function() o.folder:Destroy() end) end)
+end
+end
+end
+
+local function startVoid(at, groundPos, wallR)
+if fx then endVoid(true) end
+oldZoom = lp.CameraMaxZoomDistance
+pcall(function() lp.CameraMaxZoomDistance = math.min(oldZoom, CFG.domeRadius - 6) end)
+fx = buildVoid(at, groundPos, wallR)
+lightOn()
+end
+
+local function wallSpec()
+if CFG.tall then return "Tall Metal Barrier", 12, 9.5 end
+return "Short Metal Barrier", 8, 10
+end
+
+local function knownBarriers()
+local s = {}
+for _, d in ipairs(workspace:GetChildren()) do
+if d:IsA("Model") and d:FindFirstChild("IsBarrier") then s[d] = true end
+end
+return s
+end
+
+local function waitNew(known, pos, timeout)
+local t0 = os.clock()
+while os.clock() - t0 < timeout do
+for _, d in ipairs(workspace:GetChildren()) do
+if not known[d] and d:IsA("Model") and d:FindFirstChild("IsBarrier") then
+local p = barrierPos(d)
+if Vector3.new(p.X - pos.X, 0, p.Z - pos.Z).Magnitude < 4 then
+known[d] = true
+return d
+end
+end
+end
+task.wait(0.04)
+end
+return nil
+end
+
+local function placeRing(groundPos, mine)
+local remote = ReplicatedStorage:FindFirstChild("PlaceBarrier")
+local lib = ReplicatedStorage:FindFirstChild("Barriers")
+local name, n, rad = wallSpec()
+local model = lib and lib:FindFirstChild(name)
+if not (remote and model) then return 0, n, "this game has no barrier system" end
+local known = knownBarriers()
+local placed = 0
+for i = 1, n do
+if session ~= mine or stopped then break end
+local a = (i - 1) / n * math.pi * 2
+local dir = Vector3.new(math.cos(a), 0, math.sin(a))
+local pos = groundPos + dir * rad
+local cf = CFrame.lookAt(pos, pos + dir)
+local ok = false
+for attempt = 1, 2 do
+pcall(function() remote:FireServer(model, cf) end)
+if waitNew(known, pos, CFG.placeTimeout) then ok = true break end
+end
+if ok then
+placed += 1
+shake(0.9, 0.18)
+elseif i == 1 then
+return 0, n, "the server did not place a barrier (you may need the barrier item, or it is on cooldown)"
+end
+task.wait(0.03)
+end
+return placed, n, nil
+end
+
+local function release(r, auto)
+if rootWasAnchored ~= nil and r then pcall(function() r.Anchored = rootWasAnchored end) end
+rootWasAnchored = nil
+end
+
+local leave
+local function expand(previewOnly)
+if busy or active or stopped then return end
+local r = root()
+local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+if not r or not hum or hum.Health <= 0 then return end
+local gy = groundY(r.Position)
+if not gy then toast("Stand on the ground first", true) return end
+busy = true
+session += 1
+local mine = session
+center = r.Position
+local groundPos = Vector3.new(center.X, gy, center.Z)
+local _, _, wallR = wallSpec()
+rootWasAnchored = r.Anchored
+pcall(function() r.Anchored = true end)
+if CFG.cinematic then
+guiKill()
+gui = buildGui()
+tween(gui.top, 0.4, { Position = UDim2.new(0, 0, 0.13, 0) })
+tween(gui.bot, 0.4, { Position = UDim2.new(0, 0, 0.87, 0) })
+tween(gui.tint, 0.8, { BackgroundTransparency = 0.55 })
+end
+playVoice(nil, 1)
+shake(1.2, 0.5)
+if CFG.cinematic and gui then
+showTitle(gui, "領域展開", "RYOIKI TENKAI", 1.6)
+end
+task.wait(0.55)
+local placed, total, why = 0, 1, nil
+if previewOnly then
+task.wait(1.2)
+placed, total = 1, 1
+else
+placed, total, why = placeRing(groundPos, mine)
+end
+if session ~= mine or stopped then
+release(root())
+busy = false
+return
+end
+if placed == 0 then
+release(root())
+guiKill()
+busy = false
+toast("Domain failed: " .. tostring(why or "no walls were placed"), true)
+return
+end
+if gui then
+flash(0.05, 0.9)
+tween(gui.tint, 0.4, { BackgroundTransparency = 1 })
+end
+shake(2.2, 0.7)
+if CFG.voidFx then startVoid(center, groundPos, wallR) end
+if gui then
+showTitle(gui, "無量空処", "DOMAIN EXPANSION  /  UNLIMITED VOID", 2.4)
+task.delay(2.8, function()
+if gui then
+tween(gui.top, 0.6, { Position = UDim2.new(0, 0, 0, 0) })
+tween(gui.bot, 0.6, { Position = UDim2.new(0, 0, 1, 0) })
+end
+end)
+task.delay(4, function() if gui and not active then guiKill() end end)
+end
+release(root())
+active = true
+busy = false
+if placed < total then
+toast("Domain up, but only " .. placed .. " of " .. total .. " walls stood up. There may be gaps", true)
+end
+if previewOnly then
+task.delay(7, function() if active and session == mine then leave(false, true) end end)
+end
+end
+
+leave = function(auto, noMove)
+if not active then return end
+active = false
+session += 1
+local r = root()
+if not auto and not noMove and r then
+local cam = workspace.CurrentCamera
+local look = cam and cam.CFrame.LookVector or Vector3.new(0, 0, -1)
+local flat = Vector3.new(look.X, 0, look.Z)
+flat = flat.Magnitude > 0.05 and flat.Unit or Vector3.new(0, 0, -1)
+local _, _, wallR = wallSpec()
+local out = center + flat * (wallR + CFG.exitDistance)
+local gy = groundY(out + Vector3.new(0, 6, 0)) or (center.Y - 3)
+pcall(function() r.CFrame = CFrame.lookAt(Vector3.new(out.X, gy + 3.2, out.Z), Vector3.new(out.X, gy + 3.2, out.Z) + flat) end)
+end
+if gui then flash(0.05, 0.6) end
+endVoid(false)
+shake(1.2, 0.4)
+task.delay(0.7, function() if not active then guiKill() end end)
+end
+
+local function toggle()
+if busy then return end
+if active then leave(false) else task.spawn(expand, false) end
+end
+
+local function remoteDrop(pl)
+local d = remoteDomes[pl]
+if not d then return end
+remoteDomes[pl] = nil
+pcall(function() d.folder:Destroy() end)
+end
+local function remoteDropAll()
+for pl in pairs(remoteDomes) do remoteDrop(pl) end
+end
+local function remoteMake(pl, at)
+local f = Instance.new("Folder")
+f.Name = "DomainOther"
+f.Parent = workspace
+local R = 17
+local shell = newPart(f, Vector3.new(2, 2, 2), Color3.fromRGB(70, 60, 190), Enum.Material.ForceField, Enum.PartType.Ball)
+shell.Transparency = 0.15
+shell.CFrame = CFrame.new(at)
+local core = newPart(f, Vector3.new(2, 2, 2), Color3.fromRGB(4, 4, 14), Enum.Material.SmoothPlastic, Enum.PartType.Ball)
+core.Transparency = 0.45
+core.CFrame = CFrame.new(at)
+tween(shell, 0.9, { Size = Vector3.new(R * 2, R * 2, R * 2) }, Enum.EasingStyle.Quart)
+tween(core, 0.9, { Size = Vector3.new(R * 1.94, R * 1.94, R * 1.94) }, Enum.EasingStyle.Quart)
+local lt = Instance.new("PointLight")
+lt.Color = Color3.fromRGB(150, 130, 255)
+lt.Range = 40
+lt.Brightness = 1.6
+lt.Parent = shell
+local rings = {
+{ model = dotRing(f, at, 11, 36, 0.4, Color3.fromRGB(200, 225, 255)), tx = 0.2, tz = 0, spd = 0.7 },
+{ model = dotRing(f, at, 14, 44, 0.45, Color3.fromRGB(170, 150, 255)), tx = 1.1, tz = 0.5, spd = -0.5 },
+}
+local d = { folder = f, at = at, rings = rings, shell = shell, born = os.clock() }
+local pr = pl.Character and pl.Character:FindFirstChild("HumanoidRootPart")
+if pr then playVoice(pr, 0.9) end
+return d
+end
+
+local function scanOthers()
+if not CFG.watch then remoteDropAll() return end
+local me = root()
+local bars = {}
+for _, d in ipairs(workspace:GetChildren()) do
+if d:IsA("Model") and d:FindFirstChild("IsBarrier") then
+table.insert(bars, barrierPos(d))
+end
+end
+local seen, count = {}, 0
+if #bars >= 6 then
+for _, pl in ipairs(Players:GetPlayers()) do
+local r = pl ~= lp and pl.Character and pl.Character:FindFirstChild("HumanoidRootPart")
+if r and count < 2 and (not me or (r.Position - me.Position).Magnitude < CFG.watchRange) then
+local sectors, n = {}, 0
+local sx, sz, sy = 0, 0, 0
+for _, b in ipairs(bars) do
+local dx, dz = b.X - r.Position.X, b.Z - r.Position.Z
+local dist = math.sqrt(dx * dx + dz * dz)
+if dist < 14 and math.abs(b.Y - r.Position.Y) < 12 then
+n += 1
+sx, sz, sy = sx + b.X, sz + b.Z, sy + b.Y
+sectors[math.floor((math.atan2(dz, dx) + math.pi) / (math.pi / 4)) % 8] = true
+end
+end
+local covered = 0
+for _ in pairs(sectors) do covered += 1 end
+if n >= 6 and covered >= 6 then
+count += 1
+seen[pl] = true
+local at = Vector3.new(sx / n, r.Position.Y + 1, sz / n)
+local d = remoteDomes[pl]
+if not d then
+d = remoteMake(pl, at)
+remoteDomes[pl] = d
+end
+end
+end
+end
+end
+for pl in pairs(remoteDomes) do
+if not seen[pl] then remoteDrop(pl) end
+end
+end
+
+local acc = 0
+table.insert(conns, RunService.Heartbeat:Connect(function(dt)
+acc += dt
+if acc >= 0.4 then
+acc = 0
+local ok, err = pcall(scanOthers)
+if not ok then warn("[Domain] scan error: " .. tostring(err)) remoteDropAll() end
+end
+end))
+table.insert(conns, RunService.RenderStepped:Connect(function()
+local now = os.clock()
+if fx then pcall(voidFrame, now) end
+for _, d in pairs(remoteDomes) do
+for _, rg in ipairs(d.rings) do
+pcall(function() rg.model:PivotTo(CFrame.new(d.at) * CFrame.Angles(rg.tx, now * rg.spd, rg.tz)) end)
+end
+end
+if active then
+local r = root()
+local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+if not r or not hum or hum.Health <= 0 or (Vector3.new(r.Position.X - center.X, 0, r.Position.Z - center.Z)).Magnitude > 24 then
+leave(true)
+end
+end
+end))
+table.insert(conns, UIS.InputBegan:Connect(function(input, processed)
+if processed then return end
+if input.KeyCode == CFG.key then toggle() end
+end))
+
+local function shutdown()
+stopped = true
+session += 1
+for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
+table.clear(conns)
+pcall(function() RunService:UnbindFromRenderStep("DomainShake") end)
+active, busy = false, false
+local r = root()
+release(r)
+endVoid(true)
+guiKill()
+remoteDropAll()
+end
+
+getgenv().DomainExpansion = {
+cfg = CFG,
+isOn = function() return active or busy end,
+toggle = toggle,
+preview = function() if not (busy or active) then task.spawn(expand, true) end end,
+stop = function()
+shutdown()
+getgenv().DomainExpansion = nil
+end,
+}
+table.insert(stops, function() if getgenv().DomainExpansion then getgenv().DomainExpansion.stop() end end)
+end)
+
 run("Shop", function()
 local CFG = {
 key = Enum.KeyCode.P, -- opens the pawn / weapon shop
@@ -6384,10 +7088,10 @@ BackgroundColor3 = Color3.new(1, 1, 1),
 BorderSizePixel = 0,
 ClipsDescendants = true,
 Active = true,
-Visible = not splash.active,
+Visible = false,
 }, ui)
 corner(win, 14)
-local winScale = mk("UIScale", { Scale = splash.active and 0.9 or 1 }, win)
+local winScale = mk("UIScale", { Scale = 0.93 }, win)
 mk("UIGradient", { Color = ColorSequence.new(Color3.fromRGB(19, 14, 36), Color3.fromRGB(8, 8, 15)), Rotation = 65 }, win)
 local winStroke = mk("UIStroke", { Thickness = 1.6, Color = Color3.new(1, 1, 1), Transparency = 0.1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, win)
 spin(accentGradient(winStroke, 0), 50, win)
@@ -6467,7 +7171,7 @@ TextSize = 13,
 TextColor3 = THEME.sub,
 }, win)
 
-local menuOpen = not splash.active
+local menuOpen = false
 local menuToken = 0
 getgenv().__BabylonMenuOpen = menuOpen
 local function setMenu(show)
@@ -6486,7 +7190,7 @@ if menuToken == mine then win.Visible = false end
 end)
 end
 end
-onIntroDone = function() setMenu(true) end
+onIntroDone = function() if splash.active then setMenu(true) end end
 
 local dragging, dragStart, startPos = false, nil, nil
 table.insert(conns, top.InputBegan:Connect(function(input)
@@ -6862,6 +7566,17 @@ addSlider(fuga, "Charge-up (seconds)", 0.1, 1.5, 0.05, function() local f = api(
 addSlider(fuga, "Lean outwards (degrees)", 0, 80, 1, function() local f = api("FugaRing") return f and f.cfg.tilt or 40 end, function(v) local f = api("FugaRing") if f then f.cfg.tilt = v end end)
 infoLabel(fuga, "Buy Molotovs at Banmin. With the ring on they float around you in a spinning circle of fire. Hold the left mouse button to spray them one after another like a machine gun, aiming with your cursor. Each Molotov lands where your cursor was when it left the ring. Each throw uses up one Molotov. Separate from the Gate (guns).", 84)
 
+local dom = newTab("Domain")
+addButton(dom, "Expand / leave the domain", function() local d = api("DomainExpansion") if d then d.toggle() end end)
+addKeybind(dom, "Domain key", function() local d = api("DomainExpansion") return d and d.cfg.key or Enum.KeyCode.X end, function(k) local d = api("DomainExpansion") if d then d.cfg.key = k end end)
+addToggle(dom, "Tall walls (12 around you). Off = short walls (8)", function() local d = api("DomainExpansion") return d and d.cfg.tall end, function(v) local d = api("DomainExpansion") if d then d.cfg.tall = v end end)
+addToggle(dom, "Cinematic bars, flash and title card (visual)", function() local d = api("DomainExpansion") return d and d.cfg.cinematic end, function(v) local d = api("DomainExpansion") if d then d.cfg.cinematic = v end end)
+addToggle(dom, "Dark void and stars on my screen (visual)", function() local d = api("DomainExpansion") return d and d.cfg.voidFx end, function(v) local d = api("DomainExpansion") if d then d.cfg.voidFx = v end end)
+addToggle(dom, "See other players' domes (ring of barriers)", function() local d = api("DomainExpansion") return d and d.cfg.watch end, function(v) local d = api("DomainExpansion") if d then d.cfg.watch = v end end)
+addSlider(dom, "Voice line volume", 0, 5, 0.1, function() local d = api("DomainExpansion") return d and d.cfg.voiceVolume or 2.4 end, function(v) local d = api("DomainExpansion") if d then d.cfg.voiceVolume = v end end)
+addSlider(dom, "Void size (studs)", 24, 60, 1, function() local d = api("DomainExpansion") return d and d.cfg.domeRadius or 34 end, function(v) local d = api("DomainExpansion") if d then d.cfg.domeRadius = v end end)
+addButton(dom, "Preview the look (places no walls)", function() local d = api("DomainExpansion") if d then d.preview() end end)
+
 local items = newTab("Items")
 addButton(items, "Open pawn / weapon shop", function() local o = api("OpenShop") if o then o.run(o.cfg.shops[1]) end end)
 addKeybind(items, "Shop key", function() local o = api("OpenShop") return o and o.cfg.key or Enum.KeyCode.P end, function(k) local o = api("OpenShop") if o then o.cfg.key = k end end)
@@ -6985,6 +7700,7 @@ lbl.Text = CREDIT .. '\n<font size="12" color="#8a8aa8">Gate of Babylon</font>'
 end
 infoLabel(info, "Executor: " .. execName())
 infoLabel(info, "RightShift shows or hides this menu.")
+addToggle(info, "Show on-screen messages (off = nothing but this menu)", function() return getgenv().__BabylonToasts == true end, function(v) getgenv().__BabylonToasts = v end)
 do
 local caps = {}
 for _, fname in ipairs({ "getconnections", "firetouchinterest", "sethiddenproperty", "gethui", "decompile" }) do
@@ -7042,13 +7758,9 @@ print("[Babylon] executor=" .. tostring(ok and name or "unknown") .. " noRecoil=
 end
 
 splash.finish(function()
-badge.Visible = true
 pcall(onIntroDone)
 if #loadErrors > 0 then
-badge.Text = "Babylon: " .. #loadErrors .. " feature(s) failed. See menu > Info"
-badge.BackgroundColor3 = Color3.fromRGB(60, 20, 20)
-badge.TextColor3 = Color3.fromRGB(255, 170, 170)
-toast(loadErrors[1])
+warn("[Babylon] " .. #loadErrors .. " feature(s) failed: " .. tostring(loadErrors[1]))
 else
 toast("Babylon injected. RightShift opens the menu")
 end
