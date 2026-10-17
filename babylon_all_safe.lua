@@ -33,11 +33,13 @@ if not loadstring then
 end
 
 local SRC = [==[
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local lp = Players.LocalPlayer
+
 local KS = {
 url = "https://raw.githubusercontent.com/Turdeater/Killswitch/main/switch.txt",
 strict = false,  -- true = also refuse to run when the link cannot be reached (safer, but breaks offline / no-HTTP executors)
@@ -47,6 +49,7 @@ exempt = {
 [271644981] = true,  -- Kazhauzx (Hinazuki)
 },
 }
+
 function KS.notice(text)
 pcall(function()
 local gui = Instance.new("ScreenGui")
@@ -68,6 +71,7 @@ box.Parent = gui
 task.delay(8, function() gui:Destroy() end)
 end)
 end
+
 function KS.check()
 if KS.url == "" or KS.exempt[lp.UserId] then return "on" end
 local url = KS.url .. (KS.url:find("?", 1, true) and "&" or "?") .. "t=" .. tostring(os.time())
@@ -93,16 +97,19 @@ if word == "on" then return "on" end
 if word == "off" then return "off" end
 return KS.strict and "off" or "unknown"
 end
+
 print("[Babylon] checking kill switch")
 if KS.check() == "off" then
 warn("[Babylon] switched off by its owner")
 KS.notice("Babylon is switched off by its owner.")
 return
 end
+
 for _, name in ipairs({ "BabylonAll", "FloatGuns", "BringGuns", "SellAll", "OpenShop", "BabylonSpeed", "BabylonESP", "BabylonJump", "BabylonDefense", "BabylonCrosshair" }) do
 local old = getgenv()[name]
 if old and old.stop then pcall(old.stop) end
 end
+
 print("[Babylon] script started")
 local uiParent = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui", 10)
 if not uiParent and gethui then
@@ -115,6 +122,7 @@ ui.ResetOnSpawn = false
 ui.IgnoreGuiInset = true
 ui.DisplayOrder = 999
 ui.Parent = uiParent
+
 task.spawn(function()
 for _ = 1, 30 do
 task.wait(0.1)
@@ -125,6 +133,7 @@ break
 end
 end
 end)
+
 local badge = Instance.new("TextLabel")
 badge.Name = "Badge"
 badge.AnchorPoint = Vector2.new(0, 0)
@@ -146,6 +155,7 @@ st.Thickness = 1.2
 st.Transparency = 0.2
 st.Parent = badge
 end
+
 local toastLabel = Instance.new("TextLabel")
 toastLabel.Name = "Toast"
 toastLabel.AnchorPoint = Vector2.new(0.5, 0)
@@ -167,6 +177,7 @@ st.Thickness = 1.2
 st.Transparency = 0.25
 st.Parent = toastLabel
 end
+
 local toastStamp = 0
 local function toast(text)
 print("[Babylon] " .. text)
@@ -178,16 +189,20 @@ task.delay(3.5, function()
 if toastStamp == mine then toastLabel.Visible = false end
 end)
 end
+
 local stops = {}
+
 local TweenService = game:GetService("TweenService")
 local ACCENT = Color3.fromRGB(138, 99, 255)  -- violet
 local ACCENT2 = Color3.fromRGB(66, 214, 255) -- cyan
 local CREDIT = 'Made by <font color="#9d7bff">Ace</font> <font color="#8a8aa8">&amp;</font> <font color="#4fd8ff">Hinazuki</font>'
+
 local function tween(obj, time, props, style, dir)
 local t = TweenService:Create(obj, TweenInfo.new(time, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), props)
 t:Play()
 return t
 end
+
 local function accentGradient(parent, rotation)
 local g = Instance.new("UIGradient")
 g.Color = ColorSequence.new({
@@ -199,6 +214,7 @@ g.Rotation = rotation or 0
 g.Parent = parent
 return g
 end
+
 local spinners = {}
 local function spin(g, speed, owner) table.insert(spinners, { g = g, speed = speed, owner = owner }) end
 do
@@ -219,6 +235,7 @@ end
 end)
 table.insert(stops, function() animConn:Disconnect() end)
 end
+
 local splash = { active = false, progress = function() end, finish = function(cb) if cb then cb() end end }
 local onIntroDone = function() end
 do
@@ -237,6 +254,7 @@ local bg = Instance.new("UIGradient")
 bg.Color = ColorSequence.new(Color3.fromRGB(14, 10, 30), Color3.fromRGB(4, 4, 10))
 bg.Rotation = 60
 bg.Parent = root
+
 local particles = {}
 for i = 1, 30 do
 local size = math.random(2, 5)
@@ -252,6 +270,7 @@ c.Parent = f
 f.Parent = root
 particles[i] = { f = f, x = math.random(), y = math.random(), v = 0.03 + math.random() * 0.07, sway = math.random() * 6.28 }
 end
+
 local function ring(size, thick, speed)
 local r = Instance.new("Frame")
 r.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -280,6 +299,7 @@ r.Parent = root
 end
 ring(360, 2, 150)
 ring(300, 1, -220)
+
 local card = Instance.new("Frame")
 card.AnchorPoint = Vector2.new(0.5, 0.5)
 card.Position = UDim2.new(0.5, 0, 0.5, -10)
@@ -291,6 +311,7 @@ local cardScale = Instance.new("UIScale")
 cardScale.Scale = 0.92
 cardScale.Parent = card
 tween(cardScale, 0.9, { Scale = 1 }, Enum.EasingStyle.Quint)
+
 local letters = {}
 local word = "BABYLON"
 for i = 1, #word do
@@ -309,6 +330,7 @@ local g = accentGradient(l, 90)
 spin(g, 70, root)
 letters[i] = l
 end
+
 local function text(txt, y, size, font, color, h)
 local t = Instance.new("TextLabel")
 t.AnchorPoint = Vector2.new(0.5, 0)
@@ -329,6 +351,7 @@ local sub = text("G A T E   O F   B A B Y L O N", 92, 13, Enum.Font.GothamMedium
 local credit = text(CREDIT, 204, 18, Enum.Font.GothamBold, Color3.new(1, 1, 1), 26)
 local hint = text("RightShift opens the menu", 234, 12, Enum.Font.Gotham, Color3.fromRGB(110, 110, 140))
 local status = text("Starting ...", 162, 12, Enum.Font.GothamMedium, Color3.fromRGB(170, 170, 200))
+
 local div = Instance.new("Frame")
 div.AnchorPoint = Vector2.new(0.5, 0)
 div.Position = UDim2.new(0.5, 0, 0, 122)
@@ -343,6 +366,7 @@ NumberSequenceKeypoint.new(0, 1),
 NumberSequenceKeypoint.new(0.5, 0),
 NumberSequenceKeypoint.new(1, 1),
 })
+
 local track = Instance.new("Frame")
 track.AnchorPoint = Vector2.new(0.5, 0)
 track.Position = UDim2.new(0.5, 0, 0, 144)
@@ -365,6 +389,7 @@ local fc = Instance.new("UICorner")
 fc.CornerRadius = UDim.new(1, 0)
 fc.Parent = fill
 spin(accentGradient(fill, 0), 120, root)
+
 tween(root, 0.5, { GroupTransparency = 0 })
 for i, l in ipairs(letters) do
 local x = l.Position.X.Offset
@@ -385,6 +410,7 @@ if not root.Parent then return end
 tween(credit, 0.8, { TextTransparency = 0 })
 tween(hint, 0.8, { TextTransparency = 0.2 })
 end)
+
 local target, shown, statusText, finishCb, done = 0, 0, "Starting", nil, false
 local conn
 local function outro(cb)
@@ -420,6 +446,7 @@ outro(cb)
 end
 end)
 table.insert(stops, function() if conn then conn:Disconnect() end end)
+
 splash.progress = function(frac, txt)
 target = math.clamp(frac, 0, 1)
 if txt then statusText = txt end
@@ -436,6 +463,7 @@ local leftover = ui:FindFirstChild("Intro")
 if leftover then leftover:Destroy() end
 end
 end
+
 local loadErrors = {}
 local MODULE_TOTAL = 11
 local modulesDone = 0
@@ -451,6 +479,7 @@ end
 modulesDone += 1
 splash.progress(modulesDone / MODULE_TOTAL, modulesDone >= MODULE_TOTAL and "Almost ready" or ("Loaded " .. name))
 end
+
 run("Gate", function()
 local CFG = {
 toggleKey = Enum.KeyCode.G,
@@ -480,11 +509,13 @@ reloadAll = true,
 noRecoil = true,
 checkEvery = 0.5,
 }
+
 local isReal = (function()
 local ok, name = pcall(function() return identifyexecutor and identifyexecutor() or "" end)
 return ok and type(name) == "string" and name:lower():find("real", 1, true) ~= nil
 end)()
 local calmedObjs = setmetatable({}, { __mode = "k" })
+
 local enabled = true
 local userHeld = nil
 local adopted = {}
@@ -492,15 +523,19 @@ local gunsState = {}
 local track = nil
 local conns = {}
 local patchedRecoil = {}
+
 local function connect(signal, fn)
 local c = signal:Connect(fn)
 table.insert(conns, c)
 return c
 end
+
 local function char() return lp.Character end
+
 local function isGun(t)
 return typeof(t) == "Instance" and t:IsA("Tool") and t:FindFirstChild("FireEvent") ~= nil and t:FindFirstChild("Handle") ~= nil
 end
+
 local function gunsIn(container)
 local list = {}
 if container then
@@ -510,11 +545,13 @@ end
 end
 return list
 end
+
 local function allGuns()
 local list = gunsIn(lp:FindFirstChild("Backpack"))
 for _, t in ipairs(gunsIn(char())) do table.insert(list, t) end
 return list
 end
+
 local function gripFor(tool)
 local c = char()
 local handle = tool:FindFirstChild("Handle")
@@ -524,6 +561,7 @@ for _, d in ipairs(arm:GetChildren()) do
 if d:IsA("Weld") and d.Name == "RightGrip" and d.Part1 == handle then return d end
 end
 end
+
 local function restoreOne(tool)
 local s = gunsState[tool]
 if not s then return end
@@ -540,6 +578,7 @@ h.AssemblyAngularVelocity = Vector3.zero
 end
 gunsState[tool] = nil
 end
+
 local function releaseAdopted()
 for tool in pairs(gunsState) do restoreOne(tool) end
 local bp = lp:FindFirstChild("Backpack")
@@ -548,12 +587,14 @@ if tool.Parent == char() and bp then tool.Parent = bp end
 end
 table.clear(adopted)
 end
+
 local function stopEmote()
 if track then
 pcall(function() track:Stop(0.3) end)
 track = nil
 end
 end
+
 local function startEmote()
 if track or CFG.emote == "none" then return end
 local c = char()
@@ -582,6 +623,7 @@ tr:Play(0.3)
 tr:AdjustSpeed(CFG.emoteSpeed)
 end
 end
+
 local function calmRecoil(obj)
 if type(obj) ~= "table" then return obj end
 pcall(function()
@@ -593,6 +635,7 @@ obj.FlinchFire = function() end
 obj.Update = function() end
 return obj
 end
+
 local function scanRecoil()
 local list
 if type(filtergc) == "function" then
@@ -619,6 +662,7 @@ end
 end
 return n
 end
+
 local function holdingGun()
 local c = char()
 if not c then return false end
@@ -627,6 +671,7 @@ if t:IsA("Tool") and t:FindFirstChild("GunLocal") then return true end
 end
 return false
 end
+
 local function patchTool(tool)
 if not CFG.noRecoil or not tool:IsA("Tool") then return end
 if not isReal then return end -- handled by the scan loop below
@@ -646,17 +691,20 @@ end
 end
 end)
 end
+
 local function watchForRecoil(container)
 if not container then return end
 for _, t in ipairs(container:GetChildren()) do patchTool(t) end
 connect(container.ChildAdded, patchTool)
 end
+
 watchForRecoil(lp:FindFirstChild("Backpack"))
 if lp.Character then watchForRecoil(lp.Character) end
 connect(lp.CharacterAdded, function(c)
 watchForRecoil(c)
 watchForRecoil(lp:WaitForChild("Backpack"))
 end)
+
 local function setNoRecoil(on)
 CFG.noRecoil = on and true or false
 if CFG.noRecoil then
@@ -670,6 +718,7 @@ for m, orig in pairs(patchedRecoil) do m.new = orig end
 table.clear(patchedRecoil)
 end
 end
+
 if not isReal then
 local nextScan = 0
 local wasHolding = false
@@ -686,6 +735,7 @@ wasHolding = false
 end
 end)
 end
+
 local reloadConn = nil
 local reloadWatching = nil
 local reloadBusyUntil = 0
@@ -707,6 +757,7 @@ end
 end)
 table.insert(conns, reloadConn)
 end
+
 local rebinding = false
 local rebindAt = nil
 local function rebind(tool)
@@ -724,6 +775,7 @@ if tool.Parent == bp and hum.Health > 0 then tool.Parent = c end
 task.wait(0.1)
 rebinding = false
 end
+
 local function setEnabled(on)
 if on == enabled then return end
 enabled = on
@@ -736,16 +788,19 @@ if keep then task.delay(0.4, function() rebind(keep) end) end
 end
 toast("Gate of Babylon " .. (enabled and "ON" or "OFF"))
 end
+
 connect(UIS.InputBegan, function(input, processed)
 if processed then return end
 if input.KeyCode == CFG.toggleKey then setEnabled(not enabled) end
 end)
+
 connect(lp.CharacterRemoving, function()
 userHeld = nil
 track = nil
 table.clear(adopted)
 table.clear(gunsState)
 end)
+
 getgenv().FloatGuns = {
 cfg = CFG,
 toggle = function() setEnabled(not enabled) end,
@@ -765,6 +820,7 @@ getgenv().FloatGuns = nil
 end,
 }
 table.insert(stops, function() if getgenv().FloatGuns then getgenv().FloatGuns.stop() end end)
+
 connect(RunService.Stepped, function()
 if not CFG.staticArm or not enabled or next(gunsState) == nil then return end
 local c = char()
@@ -772,6 +828,7 @@ local torso = c and c:FindFirstChild("Torso")
 local rs = torso and torso:FindFirstChild("Right Shoulder")
 if rs then rs.Transform = CFrame.new() end
 end)
+
 local lastCheck = 0
 local function maintain()
 if rebinding then return end
@@ -804,6 +861,7 @@ rebindAt = nil
 task.spawn(rebind, userHeld)
 end
 end
+
 local function clampAim(dir, flatFallback)
 local flat = Vector3.new(dir.X, 0, dir.Z)
 if flat.Magnitude < 0.05 then flat = flatFallback end
@@ -812,18 +870,23 @@ local pitch = math.asin(math.clamp(dir.Unit.Y, -1, 1))
 pitch = math.clamp(pitch, math.rad(CFG.minPitch), math.rad(CFG.maxPitch))
 return (CFrame.lookAt(Vector3.zero, flat) * CFrame.Angles(pitch, 0, 0)).LookVector
 end
+
 connect(RunService.RenderStepped, function()
 local c = char()
 local root = c and c:FindFirstChild("HumanoidRootPart")
+
 local floating = enabled and userHeld ~= nil
 if floating and not track then startEmote()
 elseif not floating and track then stopEmote() end
+
 if not enabled or not root then return end
+
 if os.clock() - lastCheck > CFG.checkEvery then
 lastCheck = os.clock()
 maintain()
 end
 if not userHeld and next(gunsState) == nil then return end -- no gun in hand: nothing to position this frame
+
 local active = {}
 local held = nil
 for _, t in ipairs(gunsIn(c)) do
@@ -836,10 +899,12 @@ end
 for tool in pairs(gunsState) do
 if tool.Parent ~= c then gunsState[tool] = nil end
 end
+
 local forward = root.CFrame.LookVector * Vector3.new(1, 0, 1)
 if forward.Magnitude < 0.01 then forward = Vector3.new(0, 0, -1) end
 forward = forward.Unit
 local frame = CFrame.lookAt(root.Position, root.Position + forward)
+
 local target, parallelDir
 if CFG.aimMode ~= "forward" then
 local cam = workspace.CurrentCamera
@@ -852,14 +917,17 @@ local hit = workspace:Raycast(ray.Origin, ray.Direction * 1000, params)
 target = hit and hit.Position or (ray.Origin + ray.Direction * 120)
 parallelDir = clampAim(target - root.Position, forward)
 end
+
 local n = #active
 local rows = math.clamp(math.ceil(n / CFG.gunsPerRow), 1, CFG.maxRows)
 local cols = math.max(1, math.ceil(n / rows))
 local radius = math.max(CFG.minRadius, (cols * CFG.gunSpacing) / (2 * math.sin(math.rad(CFG.fanAngle))))
+
 local list = {}
 if held then table.insert(list, held) end
 for _, a in ipairs(active) do table.insert(list, a) end
 local wallIndex = 0
+
 for _, a in ipairs(list) do
 local g, handle = a.grip, a.grip.Part1
 local s = gunsState[a.tool]
@@ -869,6 +937,7 @@ gunsState[a.tool] = { grip = g, c0 = g.C0, part0 = g.Part0, handle = handle, mas
 handle.Massless = true
 handle.CanCollide = false
 end
+
 local i = 1
 if not a.isHeld then wallIndex += 1 i = wallIndex end
 local row = ((i - 1) % rows) + 1
@@ -885,6 +954,7 @@ CFG.back + (1 - math.cos(ang)) * radius * 0.35
 if a.isHeld then
 pos = frame * Vector3.new(0, CFG.heldHeight, CFG.heldBack)
 end
+
 local aimDir
 if CFG.aimMode == "converge" then
 aimDir = clampAim(target - pos, forward)
@@ -893,6 +963,7 @@ aimDir = parallelDir
 else
 aimDir = (CFrame.lookAt(Vector3.zero, forward) * CFrame.Angles(math.rad(CFG.tilt), 0, 0)).LookVector
 end
+
 local desired = CFrame.lookAt(pos, pos + aimDir) * CFG.faceOffset
 local newC0 = g.Part0.CFrame:Inverse() * desired * g.C1
 local old = g.C0
@@ -906,6 +977,7 @@ if moved then g.C0 = newC0 end
 end
 end)
 end)
+
 run("Fuga", function()
 local CFG = {
 key = Enum.KeyCode.Z,
@@ -927,7 +999,7 @@ sound = true,        -- sound effects while you spray (the game's built-in sound
 formation = "gyro",  -- how the Molotovs float while idle (other players see this): ring, gyro, wings, halo
 pose = true,         -- raise your arms in a hand-sign pose while you spray (other players see this)
 detach = false,      -- EXPERIMENT, KEEP OFF: placing the bottles directly made the server delete them after about 2.4 seconds
-chat = true,         -- say "Kai." when you start spraying and "FUGA." when you finish. Everyone sees the chat lines; players running this script also see the show around you
+chat = false,        -- also say "Kai." / "FUGA." in the game chat when you spray. Off by default: the shared show works from the Molotov rockets themselves, so chat is not needed
 watch = true,        -- show the Fuga effects around other players who run this script when their chat lines arrive
 safeDistance = 25,   -- studs: a throw is held back if your cursor is pointing closer than this to you (it would burn you)
 voiceId = "",        -- optional: your own Roblox audio id (for example "rbxassetid://123456") played when the ring fires
@@ -952,6 +1024,7 @@ local sprayId = 0
 local fired = setmetatable({}, { __mode = "k" }) -- Molotovs already thrown (they are removed a moment later)
 local lastAdopt = 0
 local conns = {}
+
 local function char() return lp.Character end
 local function molotovsIn(container)
 local list = {}
@@ -964,6 +1037,7 @@ end
 end
 return list
 end
+
 local function gripFor(tool)
 local c = char()
 local handle = tool:FindFirstChild("Handle")
@@ -973,6 +1047,7 @@ for _, d in ipairs(arm:GetChildren()) do
 if d:IsA("Weld") and d.Name == "RightGrip" and d.Part1 == handle then return d end
 end
 end
+
 local function restoreOne(tool)
 local st = state[tool]
 if not st then return end
@@ -990,6 +1065,7 @@ h.AssemblyAngularVelocity = Vector3.zero
 end
 state[tool] = nil
 end
+
 local mouse = lp:GetMouse()
 local aimAt = setmetatable({}, { __mode = "k" })
 local hooked = setmetatable({}, { __mode = "k" })
@@ -1009,6 +1085,7 @@ end
 local function markAim(tool)
 pcall(function() aimAt[tool] = mouse.Hit.Position end)
 end
+
 local FIRE_TEX = "rbxasset://textures/particles/fire_main.dmg"
 local toolFx = setmetatable({}, { __mode = "k" })
 local base = nil -- invisible anchored part at your feet: ember disc + light
@@ -1142,6 +1219,7 @@ tw.Completed:Once(function() ring:Destroy() end)
 task.delay(1.5, function() if ring.Parent then ring:Destroy() end end)
 end)
 end
+
 local function buildArrow()
 if arrow and arrow.part.Parent then return arrow end
 local ok, made = pcall(function()
@@ -1209,6 +1287,7 @@ end)
 if ok then arrow = made end
 return arrow
 end
+
 local function arrowVisible(v)
 if not arrow then return end
 pcall(function()
@@ -1218,6 +1297,7 @@ for _, b in ipairs(arrow.bowBeams) do b.Enabled = v end
 if not v then arrow.fire.Rate = 0 end
 end)
 end
+
 local function updateArrow(root)
 if arrowState == "idle" then
 if arrow then arrowVisible(false) end
@@ -1273,6 +1353,7 @@ a.stringR.Width0, a.stringR.Width1 = 0.3 * m, 0.3 * m
 a.fire.Rate = 60 * scale * wm
 end)
 end
+
 local SoundService = game:GetService("SoundService")
 local Debris = game:GetService("Debris")
 local function playSound(id, vol, speed)
@@ -1289,6 +1370,7 @@ end)
 end
 local S_BASS, S_BOOM, S_WHOOSH = "rbxasset://sounds/bass.wav", "rbxasset://sounds/impact_explosion_03.mp3", "rbxasset://sounds/Rocket whoosh 01.wav"
 local S_LAUNCH, S_SLASH, S_THUNDER = "rbxasset://sounds/Launching rocket.wav", "rbxasset://sounds/swordslash.wav", "rbxasset://sounds/HalloweenThunder.wav"
+
 local impacting = false
 local function playImpact()
 if not CFG.impact or impacting then return end
@@ -1366,6 +1448,7 @@ end)
 impacting = false
 end)
 end
+
 local cine = nil
 local function cineOff(instant)
 local c = cine
@@ -1447,12 +1530,14 @@ end
 end)
 end)
 end
+
 local Lighting = game:GetService("Lighting")
 local skyOrig, bloomFx, skyUsers = nil, nil, 0
 local shakeUntil, shakeMag = 0, 0
 local selfShow = nil
 local remoteShows = {}
 local RED, WHITE = Color3.fromRGB(255, 40, 20), Color3.fromRGB(255, 235, 215)
+
 local function newPart(folder, size, color, material, shape)
 local p = Instance.new("Part")
 p.Anchored = true
@@ -1467,6 +1552,7 @@ if shape then p.Shape = shape end
 p.Parent = folder
 return p
 end
+
 local function groundYAt(pos, ignore)
 local y = pos.Y - 2.9
 pcall(function()
@@ -1478,10 +1564,12 @@ if hit then y = hit.Position.Y + 0.15 end
 end)
 return y
 end
+
 local function shake(mag, dur)
 shakeMag = math.max(shakeMag, mag)
 shakeUntil = math.max(shakeUntil, os.clock() + dur)
 end
+
 local function skyOn()
 skyUsers += 1
 if skyOrig then return end
@@ -1527,6 +1615,7 @@ TweenService:Create(Lighting, TweenInfo.new(0.9, Enum.EasingStyle.Quad), o):Play
 end
 end
 end
+
 local function bolt(folder, from, to, color)
 local segs, prev = 9, from
 for i = 1, segs do
@@ -1541,6 +1630,7 @@ end
 prev = p
 end
 end
+
 local function fireEmitter(parent, rate, life, speed, size, spread)
 local e = Instance.new("ParticleEmitter")
 e.Texture = FIRE_TEX
@@ -1555,6 +1645,7 @@ e.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.15), Numbe
 e.Parent = parent
 return e
 end
+
 local function screenShow(S, withKanji)
 pcall(function()
 if not S.gui then
@@ -1631,6 +1722,7 @@ end)
 end
 end)
 end
+
 local function bigBoom(pos)
 pcall(function()
 local function sphere(color, endSize, dur, startT)
@@ -1675,12 +1767,14 @@ playSound(S_BOOM, 1, 0.6)
 playSound(S_THUNDER, 0.8, 0.9)
 end)
 end
+
 local function newShow(opts)
 local S = { on = false, folder = nil, gui = nil, conns = {}, usesSky = false }
 local sigil, shrine, bottles = {}, {}, {}
 local center, frameCF, t0 = Vector3.zero, CFrame.new(), 0
 local lance, lanceGlow, lanceBits = nil, nil, {}
 local launchT, launchFrom, launchDir = nil, nil, nil
+
 local function polygon(sides, radius, rot, color, dir, thick)
 for i = 1, sides do
 local a1 = rot + (i - 1) * 2 * math.pi / sides
@@ -1708,6 +1802,7 @@ local p = newPart(S.folder, Vector3.new(0.45, 0.3, 2.4), i % 2 == 0 and RED or W
 table.insert(sigil, { part = p, off = CFrame.lookAt(d * 13.7 + Vector3.new(0, 0.1, 0), d * 20 + Vector3.new(0, 0.1, 0)), spin = 1 })
 end
 end
+
 local function buildShrine(pos, towards)
 local K = 0.8
 local dark = Color3.fromRGB(24, 12, 12)
@@ -1746,6 +1841,7 @@ for _, fx in ipairs({ -36, -18, 0, 18, 36 }) do
 add(Vector3.new(1, 1, 1), CFrame.new(fx, 41, 0), RED, Enum.Material.Neon, nil, true)
 end
 end
+
 local function buildBottles()
 for i = 1, 9 do
 local b = newPart(S.folder, Vector3.new(2.6, 0.95, 0.95), Color3.fromRGB(95, 52, 22), Enum.Material.Glass, Enum.PartType.Cylinder)
@@ -1764,6 +1860,7 @@ fireEmitter(cap, 35, NumberRange.new(0.4, 0.8), NumberRange.new(1, 3), 1.6, Vect
 table.insert(bottles, { body = b, cap = cap, i = i })
 end
 end
+
 function S.start()
 if S.on then return end
 local root = opts.getRoot()
@@ -1947,6 +2044,7 @@ playSound(S_BASS, 0.7, 0.8)
 playSound(S_WHOOSH, 0.4, 0.6)
 end
 end
+
 function S.flash()
 if not S.on then return end
 local root = opts.getRoot()
@@ -1964,6 +2062,7 @@ end
 playSound(S_THUNDER, 0.7, 1.1)
 playSound(S_BOOM, 0.8, 0.7)
 end
+
 function S.stop(instant)
 if not S.on and not S.folder and not S.gui then return end
 S.on = false
@@ -1998,6 +2097,7 @@ table.clear(bottles)
 end
 return S
 end
+
 local function megaStart()
 if not CFG.mega then return end
 if selfShow then selfShow.stop(true) end
@@ -2018,16 +2118,9 @@ local function megaStopAll()
 megaStop(true)
 for p, s in pairs(remoteShows) do pcall(function() s.stop(true) end) remoteShows[p] = nil end
 end
-local lastCue = {}
-local function remoteCue(p, msg)
-if not CFG.watch or p == lp then return end
-local m = tostring(msg):lower():gsub("%s", "")
-local key = p.UserId .. m
-if lastCue[key] and os.clock() - lastCue[key] < 0.5 then return end -- both chat systems can report the same line
-lastCue[key] = os.clock()
-if m == "kai." then
-local old = remoteShows[p]
-if old then old.stop(true) end
+
+local function remoteStart(p, byRockets)
+if remoteShows[p] or not CFG.watch or p == lp then return remoteShows[p] end
 local count = 0
 for _ in pairs(remoteShows) do count += 1 end
 if count >= 2 then return end
@@ -2036,18 +2129,65 @@ local root = c and c:FindFirstChild("HumanoidRootPart")
 local me = char() and char():FindFirstChild("HumanoidRootPart")
 if not root or not me or (me.Position - root.Position).Magnitude > 300 then return end
 local show = newShow({ isSelf = false, getRoot = function() local ch = p.Character return ch and ch:FindFirstChild("HumanoidRootPart") end })
+show.byRockets = byRockets
 remoteShows[p] = show
 show.start()
-task.delay(9, function() if remoteShows[p] == show then remoteShows[p] = nil show.stop(false) end end)
-elseif m == "fuga." then
+task.delay(15, function() if remoteShows[p] == show then remoteShows[p] = nil show.stop(false) end end)
+return show
+end
+local function remoteFinish(p)
 local show = remoteShows[p]
-if show then
-show.flash()
+if not show then return end
 remoteShows[p] = nil
+show.flash()
 task.delay(2.2, function() show.stop(false) end)
 end
+
+local lastCue = {}
+local function remoteCue(p, msg)
+if not CFG.watch or p == lp then return end
+local m = tostring(msg):lower():gsub("%s", "")
+local key = p.UserId .. m
+if lastCue[key] and os.clock() - lastCue[key] < 0.5 then return end -- both chat systems can report the same line
+lastCue[key] = os.clock()
+if m == "kai." then remoteStart(p, false) elseif m == "fuga." then remoteFinish(p) end
+end
+
+local rocketLog, lastRocket = {}, {}
+local fugaStopped = false
+table.insert(conns, workspace.ChildAdded:Connect(function(d)
+if d.Name ~= "Rocket" or not CFG.watch then return end
+task.defer(function()
+local part = d:IsA("BasePart") and d or d:FindFirstChildWhichIsA("BasePart", true)
+if not part then return end
+local pos = part.Position
+local best, bd = nil, 60
+for _, pl in ipairs(Players:GetPlayers()) do
+local r = pl.Character and pl.Character:FindFirstChild("HumanoidRootPart")
+if r then
+local dd = (r.Position - pos).Magnitude
+if dd < bd then best, bd = pl, dd end
 end
 end
+if not best or best == lp then return end
+local now = os.clock()
+lastRocket[best] = now
+local log = rocketLog[best] or {}
+rocketLog[best] = log
+table.insert(log, now)
+while #log > 0 and now - log[1] > 1.5 do table.remove(log, 1) end
+if #log >= 2 then remoteStart(best, true) end
+end)
+end))
+task.spawn(function()
+while true do
+task.wait(0.25)
+if fugaStopped then break end
+for pl, show in pairs(remoteShows) do
+if show.byRockets and os.clock() - (lastRocket[pl] or 0) > 1.7 then remoteFinish(pl) end
+end
+end
+end)
 local function watchPlayer(p)
 if p == lp then return end
 table.insert(conns, p.Chatted:Connect(function(msg) remoteCue(p, msg) end))
@@ -2066,7 +2206,9 @@ table.insert(conns, Players.PlayerRemoving:Connect(function(p)
 local s = remoteShows[p]
 if s then remoteShows[p] = nil s.stop(true) end
 end))
+
 cineCleanup = function() cineOff(true) megaStop(true) end
+
 local function sayChat(text)
 pcall(function()
 local TCS = game:GetService("TextChatService")
@@ -2130,6 +2272,7 @@ playSound(S_SLASH, 1, 0.5)
 playSound(S_THUNDER, 0.5, 1.1)
 cineOff()
 end
+
 local function updateFx(root, charge)
 local part = ensureBase()
 if not part then return end
@@ -2146,6 +2289,7 @@ end
 if light then light.Brightness = 1.2 + charge * 4.5 + math.sin(os.clock() * 9) * 0.3 end
 end)
 end
+
 local armsFree = false
 local function driveArms(k)
 local c = char()
@@ -2171,6 +2315,7 @@ if sh and sh:IsA("JointInstance") then sh.Enabled = true end
 end
 end
 end
+
 local function releaseAll()
 pcall(driveArms, 0)
 dropFx()
@@ -2182,6 +2327,7 @@ if tool.Parent == c and bp then tool.Parent = bp end
 end
 table.clear(adopted)
 end
+
 local function setOn(v)
 v = v and true or false
 if v == on then return end
@@ -2197,6 +2343,7 @@ releaseAll()
 toast("Fuga ring OFF")
 end
 end
+
 local pathParams = RaycastParams.new()
 pathParams.FilterType = Enum.RaycastFilterType.Exclude
 local function checkAim(target)
@@ -2228,6 +2375,7 @@ end
 end
 return true
 end
+
 local function aimIsSafe()
 local c = char()
 local root = c and c:FindFirstChild("HumanoidRootPart")
@@ -2246,6 +2394,7 @@ end
 end
 return false
 end
+
 local function volley()
 if volleying then return end
 local c = char()
@@ -2267,12 +2416,14 @@ end
 task.delay(#now * CFG.gap + 1.6, function() volleying = false end)
 end)
 end
+
 local function haveMolotov()
 for _, t in ipairs(molotovsIn(char())) do
 if not fired[t] then return true end
 end
 return false
 end
+
 local function startSpray()
 if spraying or volleying then return end
 if not haveMolotov() then return end
@@ -2315,6 +2466,7 @@ sprayId += 1
 if arrowState == "charge" then arrowState = "launch" arrowT = os.clock() end
 if was then releaseEffects() end
 end
+
 table.insert(conns, UIS.InputBegan:Connect(function(input, processed)
 if input.KeyCode == CFG.key and not processed then setOn(not on) return end
 if processed or not on then return end
@@ -2329,6 +2481,7 @@ table.clear(state)
 chargeStart = nil
 volleying = false
 end))
+
 table.insert(conns, RunService.Stepped:Connect(function()
 if not on or next(state) == nil then return end
 local c = char()
@@ -2342,12 +2495,14 @@ if rs then rs.Transform = CFrame.Angles(0, 0, POSE_R * k) end
 if ls then ls.Transform = CFrame.Angles(0, 0, POSE_L * k) end
 end
 end))
+
 table.insert(conns, RunService.RenderStepped:Connect(function(dt)
 if not on then return end
 local c = char()
 local root = c and c:FindFirstChild("HumanoidRootPart")
 local hum = c and c:FindFirstChildOfClass("Humanoid")
 if not root or not hum or hum.Health <= 0 then return end
+
 if CFG.arrow then pcall(updateArrow, root) end
 local now = os.clock()
 if now - lastAdopt > 0.3 then
@@ -2358,6 +2513,7 @@ adopted[t] = true
 t.Parent = c
 end
 end
+
 local list = molotovsIn(c)
 local n = #list
 pcall(driveArms, (n > 0 and arrowState == "charge") and math.clamp((fireBlend - 0.3) / 0.7, 0, 1) or 0)
@@ -2365,12 +2521,14 @@ if n == 0 then return end
 for tool in pairs(state) do
 if tool.Parent ~= c then state[tool] = nil end
 end
+
 local charge = chargeStart and math.clamp((now - chargeStart) / CFG.chargeTime, 0, 1) or (spraying and 0.55 or 0)
 spinAngle += dt * (CFG.spin + charge * charge * 9)
 local grow = math.clamp((now - startT) / 0.7, 0, 1)
 grow = 1 - (1 - grow) * (1 - grow)
 local radius = math.max(CFG.minRadius, n * CFG.spacing / (2 * math.pi)) * grow * (1 - charge * 0.25)
 local height = CFG.height * (0.35 + 0.65 * grow) + charge * 1.2
+
 local firing = arrowState == "charge"
 fireBlend += ((firing and 1 or 0) - fireBlend) * math.min(1, dt * 9)
 local origin = root.Position + Vector3.new(0, 8, 0)
@@ -2382,6 +2540,7 @@ right = right.Unit
 local up2 = right:Cross(aimDir).Unit
 local discCenter = origin + aimDir * 11
 local discRadius = math.max(4.5, n * 1.15 / (2 * math.pi))
+
 for i, tool in ipairs(list) do
 local g = gripFor(tool)
 if g then
@@ -2457,6 +2616,7 @@ end
 end
 updateFx(root, charge)
 end))
+
 getgenv().FugaRing = {
 cfg = CFG,
 checkAim = function(t) return checkAim(t) end, -- (Vector3) -> safe, reason, distance (for testing)
@@ -2483,6 +2643,7 @@ stop = function()
 on = false
 for _, c in ipairs(conns) do c:Disconnect() end
 table.clear(conns)
+fugaStopped = true
 releaseAll()
 megaStopAll()
 getgenv().FugaRing = nil
@@ -2490,6 +2651,7 @@ end,
 }
 table.insert(stops, function() if getgenv().FugaRing then getgenv().FugaRing.stop() end end)
 end)
+
 run("Shop", function()
 local CFG = {
 key = Enum.KeyCode.P, -- opens the pawn / weapon shop
@@ -2507,9 +2669,11 @@ shops = {
 },
 }
 local busy = false
+
 local function isOpen(shop)
 return lp.PlayerGui:FindFirstChild(shop.id) ~= nil
 end
+
 local function touchOpen(root, shop)
 if not firetouchinterest then return false end
 local parts = {}
@@ -2531,6 +2695,7 @@ if isOpen(shop) then return true end
 end
 return false
 end
+
 local function buildOpen(shop)
 local shops = ReplicatedStorage:FindFirstChild("ShopGuis")
 local template = shops and shops:FindFirstChild(shop.id)
@@ -2538,6 +2703,7 @@ if not template then return false end
 template:Clone().Parent = lp.PlayerGui
 return true
 end
+
 local function open(shop)
 shop = shop or CFG.shops[1]
 if busy then return end
@@ -2559,10 +2725,12 @@ toast(shop.label .. " did not open, try again")
 end
 busy = false
 end
+
 local conn = UIS.InputBegan:Connect(function(input, processed)
 if processed then return end
 if input.KeyCode == CFG.key then task.spawn(open, CFG.shops[1]) end
 end)
+
 getgenv().OpenShop = {
 cfg = CFG,
 run = function(shop) task.spawn(open, shop) end,
@@ -2573,6 +2741,7 @@ end,
 }
 table.insert(stops, function() if getgenv().OpenShop then getgenv().OpenShop.stop() end end)
 end)
+
 run("Sell", function()
 local CFG = {
 key = Enum.KeyCode.U,
@@ -2581,6 +2750,7 @@ confirmWindow = 5,  -- seconds you have to press the second time
 keepGuns = false,   -- true = never sell guns (anything with a FireEvent)
 goKey = Enum.KeyCode.B, -- walks you to the pawn shop, sells there, and walks back to the AFK weapon walk if it was on
 }
+
 local function collect()
 local list, total = {}, 0
 local c = lp.Character
@@ -2599,8 +2769,10 @@ end
 end
 return list, total
 end
+
 local armedUntil = 0
 local busy = false
+
 local function press(force)
 if busy then return end
 local list, total = collect()
@@ -2627,6 +2799,7 @@ toast("Nothing was paid. Stand at the pawn shop with its sell screen open, then 
 end
 busy = false
 end
+
 local going = false
 local function goSell()
 if going then going = false return end
@@ -2668,11 +2841,13 @@ end
 going = false
 if resume and B.setAuto then B.setAuto(true) end
 end
+
 local conn = UIS.InputBegan:Connect(function(input, processed)
 if processed then return end
 if input.KeyCode == CFG.key then task.spawn(press) end
 if input.KeyCode == CFG.goKey then task.spawn(goSell) end
 end)
+
 getgenv().SellAll = {
 cfg = CFG,
 run = function() task.spawn(press) end,
@@ -2684,6 +2859,7 @@ end,
 }
 table.insert(stops, function() if getgenv().SellAll then getgenv().SellAll.stop() end end)
 end)
+
 run("Bring", function()
 local CFG = {
 key = Enum.KeyCode.K,
@@ -2697,6 +2873,7 @@ melee = true,
 other = true,
 }
 local busy = false
+
 local function nearOtherPlayer(pos)
 if CFG.skipNearPlayers <= 0 then return false end
 for _, p in ipairs(Players:GetPlayers()) do
@@ -2707,6 +2884,7 @@ end
 end
 return false
 end
+
 local function run()
 if busy then return end
 local c = lp.Character
@@ -2717,6 +2895,7 @@ if sethiddenproperty then
 pcall(function() sethiddenproperty(lp, "SimulationRadius", 1e9) end)
 pcall(function() sethiddenproperty(lp, "MaximumSimulationRadius", 1e9) end)
 end
+
 local found, skipped = {}, 0
 for _, d in ipairs(workspace:GetChildren()) do
 if d:IsA("Tool") and (d:FindFirstChild("FireEvent") or d:FindFirstChild("MeleeScript")) then
@@ -2726,6 +2905,7 @@ if nearOtherPlayer(h.Position) then skipped += 1 else table.insert(found, d) end
 end
 end
 end
+
 local base = root.CFrame * CFrame.new(0, 0, -CFG.inFront)
 local n = #found
 local names = {}
@@ -2745,6 +2925,7 @@ toast("Brought " .. n .. ": " .. table.concat(names, ", "))
 end
 busy = false
 end
+
 local silentOn = false
 local function grabLoose()
 local c = lp.Character
@@ -2787,6 +2968,7 @@ task.wait(2)
 end
 end)
 end
+
 local MELEE_WORDS = { "knife", "katana", "sledge", "hammer", "bat", "bokken", "axe", "machete", "sword" }
 local function pickupKindOf(m)
 local l = m.Name:lower()
@@ -2800,11 +2982,13 @@ local n = m.Name:gsub("Pickup$", "")
 if n == "Sledge" then n = "Sledgehammer" end
 return n
 end
+
 local PathfindingService = game:GetService("PathfindingService")
 local walkToken = 0
 local walking = false
 local autoOn = false
 local skipUntil = setmetatable({}, { __mode = "k" }) -- pickups that could not be reached are left alone for a while
+
 local function playerNear(pos, radius)
 for _, p in ipairs(Players:GetPlayers()) do
 if p ~= lp and p.Character then
@@ -2814,6 +2998,7 @@ end
 end
 return false
 end
+
 local function nearestPickup(root)
 local best, bestD
 for _, sp in ipairs(workspace:GetChildren()) do
@@ -2834,9 +3019,11 @@ end
 end
 return best, bestD
 end
+
 local function userIsSteering()
 return UIS:IsKeyDown(Enum.KeyCode.W) or UIS:IsKeyDown(Enum.KeyCode.A) or UIS:IsKeyDown(Enum.KeyCode.S) or UIS:IsKeyDown(Enum.KeyCode.D)
 end
+
 local function walkOnce(auto)
 if walking then
 if not auto then walkToken += 1 end -- pressing again stops the walk
@@ -2846,6 +3033,7 @@ local c = lp.Character
 local root = c and c:FindFirstChild("HumanoidRootPart")
 local hum = c and c:FindFirstChildOfClass("Humanoid")
 if not root or not hum or hum.Health <= 0 then return "none" end
+
 local target, dist = nearestPickup(root)
 if not target then
 if not auto then toast("No weapon pickup to walk to right now (none spawned, or players are next to them)") end
@@ -2856,6 +3044,7 @@ walkToken += 1
 local mine = walkToken
 local name = pickupPrettyName(target.model)
 if not auto then toast("Walking to the nearest " .. name .. " (" .. math.floor(dist) .. "m). Press " .. CFG.pickupKey.Name .. " or a move key to stop") end
+
 local points = {}
 local path = PathfindingService:CreatePath({ AgentRadius = 2, AgentHeight = 5, AgentCanJump = true, AgentCanClimb = true })
 local okPath = pcall(function() path:ComputeAsync(root.Position, target.part.Position) end)
@@ -2864,6 +3053,7 @@ points = path:GetWaypoints()
 else
 points = { { Position = target.part.Position, Action = Enum.PathWaypointAction.Walk } }
 end
+
 local startedAt = os.clock()
 local function stillGoing()
 return walkToken == mine and target.model.Parent ~= nil and hum.Health > 0 and root.Parent ~= nil and os.clock() - startedAt < 45
@@ -2910,6 +3100,7 @@ end
 walking = false
 return result
 end
+
 local function setAuto(v)
 v = v and true or false
 if v == autoOn then return end
@@ -2927,6 +3118,7 @@ if st == "ok" or st == "failed" then task.wait(0.5) else task.wait(1.5) end
 end
 end)
 end
+
 local function walkTo(pos, radius, timeout, shouldStop)
 local t0 = os.clock()
 while walking and os.clock() - t0 < 3 do task.wait(0.1) end -- let a walk that was just cancelled finish
@@ -2974,19 +3166,23 @@ hum:MoveTo(root.Position)
 walking = false
 return result
 end
+
 local function runPickups()
 setAuto(not autoOn)
 end
+
 local function walkNearest()
 if autoOn then setAuto(false) return end
 walkOnce(false)
 end
+
 local conn = UIS.InputBegan:Connect(function(input, processed)
 if processed then return end
 if input.KeyCode == CFG.key then task.spawn(run) end
 if input.KeyCode == CFG.pickupKey then task.spawn(runPickups) end
 if input.KeyCode == CFG.silentKey then setSilent(not silentOn) end
 end)
+
 getgenv().BringGuns = {
 cfg = CFG,
 run = function() task.spawn(run) end,
@@ -3008,6 +3204,7 @@ end,
 }
 table.insert(stops, function() if getgenv().BringGuns then getgenv().BringGuns.stop() end end)
 end)
+
 run("Speed", function()
 local CFG = {
 key = Enum.KeyCode.Y,
@@ -3017,6 +3214,7 @@ value = 24,
 enabled = false,
 shootLimit = 28, -- the game blocks shooting at 29 and above
 }
+
 local frame = Instance.new("Frame")
 frame.Name = "SpeedPanel"
 frame.AnchorPoint = Vector2.new(1, 0)
@@ -3027,6 +3225,7 @@ frame.BackgroundTransparency = 0.15
 frame.Visible = false -- the menu window below replaces this small panel
 frame.Parent = ui
 Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+
 local title = Instance.new("TextLabel")
 title.BackgroundTransparency = 1
 title.Position = UDim2.new(0, 10, 0, 6)
@@ -3036,6 +3235,7 @@ title.TextColor3 = Color3.new(1, 1, 1)
 title.Font = Enum.Font.GothamMedium
 title.TextSize = 14
 title.Parent = frame
+
 local button = Instance.new("TextButton")
 button.Position = UDim2.new(1, -74, 0, 6)
 button.Size = UDim2.new(0, 64, 0, 22)
@@ -3045,6 +3245,7 @@ button.TextColor3 = Color3.new(1, 1, 1)
 button.AutoButtonColor = false
 button.Parent = frame
 Instance.new("UICorner", button).CornerRadius = UDim.new(0, 6)
+
 local hint = Instance.new("TextLabel")
 hint.BackgroundTransparency = 1
 hint.Position = UDim2.new(0, 10, 1, -22)
@@ -3053,6 +3254,7 @@ hint.TextXAlignment = Enum.TextXAlignment.Left
 hint.Font = Enum.Font.Gotham
 hint.TextSize = 12
 hint.Parent = frame
+
 local track = Instance.new("Frame")
 track.Position = UDim2.new(0, 12, 0, 40)
 track.Size = UDim2.new(1, -24, 0, 6)
@@ -3060,12 +3262,14 @@ track.BackgroundColor3 = Color3.fromRGB(70, 70, 80)
 track.BorderSizePixel = 0
 track.Parent = frame
 Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
+
 local fill = Instance.new("Frame")
 fill.Size = UDim2.new(0, 0, 1, 0)
 fill.BackgroundColor3 = Color3.fromRGB(110, 200, 255)
 fill.BorderSizePixel = 0
 fill.Parent = track
 Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+
 local knob = Instance.new("Frame")
 knob.AnchorPoint = Vector2.new(0.5, 0.5)
 knob.Size = UDim2.new(0, 16, 0, 16)
@@ -3074,11 +3278,13 @@ knob.BackgroundColor3 = Color3.new(1, 1, 1)
 knob.BorderSizePixel = 0
 knob.Parent = track
 Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
 local original = nil
 local dragging = false
 local conns = {}
 local firing = false
 local lastShot = 0
+
 local function refresh()
 local alpha = (CFG.value - CFG.min) / (CFG.max - CFG.min)
 fill.Size = UDim2.new(alpha, 0, 1, 0)
@@ -3094,15 +3300,18 @@ hint.Text = "Drag the bar, Y turns it on or off"
 hint.TextColor3 = Color3.fromRGB(170, 170, 180)
 end
 end
+
 local function setFromX(x)
 local alpha = math.clamp((x - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1), 0, 1)
 CFG.value = math.floor(CFG.min + alpha * (CFG.max - CFG.min) + 0.5)
 refresh()
 end
+
 local function humanoid()
 local c = lp.Character
 return c and c:FindFirstChildOfClass("Humanoid")
 end
+
 local mode = "walk"
 local reverts = 0
 local lastSet = nil
@@ -3125,6 +3334,7 @@ end
 end
 end
 end
+
 local function setEnabled(on)
 if on == CFG.enabled then return end
 CFG.enabled = on
@@ -3143,6 +3353,7 @@ lastSet = nil
 end
 refresh()
 end
+
 local CAS = game:GetService("ContextActionService")
 local function preFire(_, state)
 if state == Enum.UserInputState.Begin then
@@ -3169,6 +3380,7 @@ CAS:UnbindAction("BabylonPreFire")
 end
 end)
 end
+
 table.insert(conns, track.InputBegan:Connect(function(input)
 if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 dragging = true
@@ -3236,7 +3448,9 @@ end
 if hum.WalkSpeed ~= target then hum.WalkSpeed = target end
 lastSet = target
 end))
+
 refresh()
+
 getgenv().BabylonSpeed = {
 cfg = CFG,
 set = function(v) CFG.value = math.clamp(v, CFG.min, CFG.max) refresh() end,
@@ -3252,6 +3466,7 @@ end,
 }
 table.insert(stops, function() if getgenv().BabylonSpeed then getgenv().BabylonSpeed.stop() end end)
 end)
+
 run("ESP", function()
 local CFG = {
 key = Enum.KeyCode.L,
@@ -3261,6 +3476,7 @@ interval = 0.25,
 local on = false
 local objs = {}
 local acc = 0
+
 local function clear(p)
 local o = objs[p]
 if o then
@@ -3269,9 +3485,11 @@ pcall(function() o.gui:Destroy() end)
 objs[p] = nil
 end
 end
+
 local function clearAll()
 for p in pairs(objs) do clear(p) end
 end
+
 local function attach(p)
 local c = p.Character
 local head = c and c:FindFirstChild("Head")
@@ -3279,6 +3497,7 @@ if not head then return end
 local o = objs[p]
 if o and o.char == c and o.hl.Parent then return end
 clear(p)
+
 local hl = Instance.new("Highlight")
 hl.FillColor = CFG.color
 hl.FillTransparency = 0.65
@@ -3286,12 +3505,14 @@ hl.OutlineColor = Color3.new(1, 1, 1)
 hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 hl.Adornee = c
 hl.Parent = c
+
 local gui = Instance.new("BillboardGui")
 gui.Size = UDim2.new(0, 200, 0, 44)
 gui.StudsOffset = Vector3.new(0, 2.8, 0)
 gui.AlwaysOnTop = true
 gui.Adornee = head
 gui.Parent = head
+
 local label = Instance.new("TextLabel")
 label.Size = UDim2.new(1, 0, 1, 0)
 label.BackgroundTransparency = 1
@@ -3300,13 +3521,16 @@ label.TextStrokeTransparency = 0.3
 label.Font = Enum.Font.GothamMedium
 label.TextSize = 14
 label.Parent = gui
+
 objs[p] = { hl = hl, gui = gui, label = label, char = c }
 end
+
 local function setOn(v)
 on = v
 if not on then clearAll() end
 toast("ESP " .. (on and "ON" or "OFF"))
 end
+
 local conn = RunService.Heartbeat:Connect(function(dt)
 if not on then return end
 acc += dt
@@ -3334,6 +3558,7 @@ for p in pairs(objs) do
 if p.Parent ~= Players then clear(p) end
 end
 end)
+
 local ITEM = { on = false, guns = true, melee = true, other = true, empty = false, maxDist = 800, key = Enum.KeyCode.O, glowNearest = 4, glowRange = 150 }
 CFG.items = ITEM
 local itemObjs = {}  -- pickup model or dropped tool -> { gui, label, kind, part, name, hl }
@@ -3346,6 +3571,7 @@ other = Color3.fromRGB(90, 220, 255),
 }
 local KIND_NAME = { gun = "Gun", melee = "Melee", other = "Item" }
 local MELEE_WORDS = { "knife", "katana", "sledge", "hammer", "bat", "bokken", "axe", "machete", "sword", "bat" }
+
 local function pickupKind(name)
 local l = name:lower()
 for _, w in ipairs(MELEE_WORDS) do
@@ -3353,16 +3579,19 @@ if l:find(w, 1, true) then return "melee" end
 end
 return "gun"
 end
+
 local function prettyName(name)
 local n = name:gsub("Pickup$", "")
 if n == "Sledge" then n = "Sledgehammer" end
 return n
 end
+
 local function toolKind(tool)
 if tool:FindFirstChild("FireEvent") then return "gun" end
 if tool:FindFirstChild("MeleeScript") then return "melee" end
 return "other"
 end
+
 local function isLoose(tool)
 local parent = tool.Parent
 if not parent or parent:IsA("Backpack") then return false end
@@ -3370,12 +3599,14 @@ local model = tool:FindFirstAncestorOfClass("Model")
 if model and model:FindFirstChildOfClass("Humanoid") then return false end
 return true
 end
+
 local function isPickupModel(m)
 if not m:IsA("Model") then return false end
 if m.Name:find("Pickup$") then return true end
 local pk = m:FindFirstChild("Pickup")
 return pk ~= nil and pk:IsA("BasePart")
 end
+
 local function makeBillboard(part, color, big)
 local gui = Instance.new("BillboardGui")
 gui.Name = "BabylonItemEsp"
@@ -3394,6 +3625,7 @@ label.TextSize = 13
 label.Parent = gui
 return gui, label
 end
+
 local function clearItem(inst)
 local o = itemObjs[inst]
 if o then
@@ -3402,6 +3634,7 @@ if o.hl then pcall(function() o.hl:Destroy() end) end
 itemObjs[inst] = nil
 end
 end
+
 local function attachObject(inst, kind, name)
 if itemObjs[inst] then return end
 local part = (inst:IsA("Tool") and inst:FindFirstChild("Handle")) or inst:FindFirstChild("Pickup") or inst:FindFirstChildWhichIsA("BasePart", true)
@@ -3409,6 +3642,7 @@ if not part then return end
 local gui, label = makeBillboard(part, KIND_COLOR[kind], true)
 itemObjs[inst] = { gui = gui, label = label, kind = kind, part = part, name = name }
 end
+
 local function createMark(spawn)
 if spawnMarks[spawn] then return end
 local loc = spawn:FindFirstChild("WeaponLocation") or spawn:FindFirstChildWhichIsA("BasePart", true)
@@ -3418,6 +3652,7 @@ label.Text = "Empty spawn"
 gui.Enabled = false
 spawnMarks[spawn] = { gui = gui, label = label, part = loc }
 end
+
 local function consider(d)
 if d:IsA("Tool") then
 if isLoose(d) then attachObject(d, toolKind(d), d.Name) end
@@ -3426,6 +3661,7 @@ if d.Name == "WeaponSpawn" then spawnList[d] = true end
 if isPickupModel(d) then attachObject(d, pickupKind(d.Name), prettyName(d.Name)) end
 end
 end
+
 local function scanItems()
 for _, c in ipairs(workspace:GetChildren()) do
 consider(c)
@@ -3434,6 +3670,7 @@ for _, d in ipairs(c:GetChildren()) do consider(d) end
 end
 end
 end
+
 local itemAdded = nil
 local function setItems(v)
 ITEM.on = v and true or false
@@ -3456,6 +3693,7 @@ table.clear(spawnList)
 end
 toast("Item ESP " .. (ITEM.on and "ON" or "OFF"))
 end
+
 local itemAcc = 0
 local itemConn = RunService.Heartbeat:Connect(function(dt)
 if not ITEM.on then return end
@@ -3525,11 +3763,13 @@ o.hl = nil
 end
 end
 end)
+
 local inputConn = UIS.InputBegan:Connect(function(input, processed)
 if processed then return end
 if input.KeyCode == CFG.key then setOn(not on) end
 if input.KeyCode == ITEM.key then setItems(not ITEM.on) end
 end)
+
 getgenv().BabylonESP = {
 cfg = CFG,
 toggle = function() setOn(not on) end,
@@ -3550,6 +3790,7 @@ end,
 }
 table.insert(stops, function() if getgenv().BabylonESP then getgenv().BabylonESP.stop() end end)
 end)
+
 run("Jump", function()
 local CFG = {
 key = Enum.KeyCode.J,
@@ -3570,11 +3811,13 @@ local conns = {}
 local airTime, bestAir, forceLand, lastBoost = 0, 0, false, 0
 local groundParams = RaycastParams.new()
 groundParams.FilterType = Enum.RaycastFilterType.Exclude
+
 local function groundDistance(char, root)
 groundParams.FilterDescendantsInstances = { char }
 local hit = workspace:Raycast(root.Position, Vector3.new(0, -1000, 0), groundParams)
 return hit and (root.Position.Y - hit.Position.Y - 3) or nil
 end
+
 local airLabel = Instance.new("TextLabel")
 airLabel.Name = "AirTime"
 airLabel.AnchorPoint = Vector2.new(0.5, 0)
@@ -3588,10 +3831,12 @@ airLabel.TextSize = 15
 airLabel.ZIndex = 100
 airLabel.Parent = ui
 Instance.new("UICorner", airLabel).CornerRadius = UDim.new(0, 8)
+
 local function humanoid()
 local c = lp.Character
 return c and c:FindFirstChildOfClass("Humanoid")
 end
+
 table.insert(conns, UIS.JumpRequest:Connect(function()
 if not CFG.infinite or forceLand then return end
 local c = lp.Character
@@ -3605,6 +3850,7 @@ lastBoost = now
 local v = root.AssemblyLinearVelocity
 root.AssemblyLinearVelocity = Vector3.new(v.X, CFG.jumpPower, v.Z)
 end))
+
 table.insert(conns, RunService.Heartbeat:Connect(function()
 local hum = humanoid()
 if not hum then return end
@@ -3617,6 +3863,7 @@ hum.UseJumpPower, hum.JumpPower, hum.JumpHeight = origJump[1], origJump[2], orig
 origJump = nil
 end
 end))
+
 local lastAirText, lastAirColor = "", nil
 table.insert(conns, RunService.Heartbeat:Connect(function(dt)
 local hum = humanoid()
@@ -3670,6 +3917,7 @@ airLabel.TextColor3 = col
 end
 end
 end))
+
 local params = RaycastParams.new()
 params.FilterType = Enum.RaycastFilterType.Exclude
 table.insert(conns, RunService.Heartbeat:Connect(function()
@@ -3685,6 +3933,7 @@ if hit then
 root.AssemblyLinearVelocity = Vector3.new(v.X, -CFG.landingSpeed, v.Z)
 end
 end))
+
 table.insert(conns, UIS.InputBegan:Connect(function(input, processed)
 if processed then return end
 if input.KeyCode == CFG.key then
@@ -3692,6 +3941,7 @@ CFG.infinite = not CFG.infinite
 toast("Infinite jump " .. (CFG.infinite and "ON" or "OFF"))
 end
 end))
+
 getgenv().BabylonJump = {
 cfg = CFG,
 resetBest = function() bestAir = 0 end,
@@ -3705,6 +3955,7 @@ end,
 }
 table.insert(stops, function() if getgenv().BabylonJump then getgenv().BabylonJump.stop() end end)
 end)
+
 run("Defense", function()
 local CFG = {
 warn = true,          -- warn when an armed player is close
@@ -3723,6 +3974,7 @@ panicSpeed = 50,      -- run speed away from the threat (the server pulls you ba
 local conns = {}
 local alerted = {}
 local panicUntil, panicTarget = 0, nil
+
 local flash = Instance.new("Frame")
 flash.Name = "ThreatFlash"
 flash.Size = UDim2.new(1, 0, 1, 0)
@@ -3733,6 +3985,7 @@ flash.Active = false
 flash.ZIndex = 5
 flash.Parent = ui
 local flashOn = false
+
 local function findPlayer(name)
 if not name or name == "" then return nil end
 name = name:lower()
@@ -3741,10 +3994,12 @@ if p ~= lp and (p.Name:lower():find(name, 1, true) or p.DisplayName:lower():find
 end
 return nil
 end
+
 local function rootOf(p)
 local c = p and p.Character
 return c and c:FindFirstChild("HumanoidRootPart")
 end
+
 local function nearestArmed()
 local myRoot = rootOf(lp)
 if not myRoot then return nil end
@@ -3762,6 +4017,7 @@ end
 end
 return best, bestD
 end
+
 local hud = Instance.new("TextLabel")
 hud.Name = "Threats"
 hud.AnchorPoint = Vector2.new(0.5, 0)
@@ -3776,16 +4032,19 @@ hud.ZIndex = 100
 hud.Visible = false
 hud.Parent = ui
 Instance.new("UICorner", hud).CornerRadius = UDim.new(0, 8)
+
 local function armedWith(char)
 for _, t in ipairs(char:GetChildren()) do
 if t:IsA("Tool") and t:FindFirstChild("FireEvent") then return t.Name end
 end
 return nil
 end
+
 local acc = 0
 table.insert(conns, RunService.Heartbeat:Connect(function(dt)
 local myChar = lp.Character
 local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+
 if CFG.antiFling and myRoot then
 if myRoot.AssemblyAngularVelocity.Magnitude > CFG.maxSpin then
 myRoot.AssemblyAngularVelocity = Vector3.zero
@@ -3795,6 +4054,7 @@ if v.Magnitude > CFG.maxSpeed then
 myRoot.AssemblyLinearVelocity = v.Unit * 50
 end
 end
+
 if os.clock() < panicUntil and myRoot then
 local tr = rootOf(panicTarget)
 if tr then
@@ -3806,9 +4066,11 @@ myRoot.AssemblyLinearVelocity = Vector3.new(d.X, v.Y, d.Z)
 end
 end
 end
+
 acc += dt
 if acc < 0.25 then return end
 acc = 0
+
 local count, closest, closestName = 0, math.huge, nil
 if CFG.warn and myRoot then
 for _, p in ipairs(Players:GetPlayers()) do
@@ -3832,6 +4094,7 @@ hud.Visible = count > 0
 if count > 0 then
 hud.Text = string.format("Armed nearby: %d   closest %s %dm", count, closestName, math.floor(closest))
 end
+
 local alarm = false
 local wp = findPlayer(CFG.watchName)
 local wroot = rootOf(wp)
@@ -3846,6 +4109,7 @@ end
 flashOn = alarm and not flashOn
 flash.BackgroundTransparency = flashOn and 0.88 or 1
 end))
+
 table.insert(conns, UIS.InputBegan:Connect(function(input, processed)
 if processed or input.KeyCode ~= CFG.panicKey then return end
 local target = findPlayer(CFG.watchName)
@@ -3858,6 +4122,7 @@ else
 toast("Panic: nobody armed nearby")
 end
 end))
+
 table.insert(conns, RunService.Stepped:Connect(function()
 if not CFG.ghostPlayers then return end
 local myChar = lp.Character
@@ -3873,6 +4138,7 @@ end
 end
 end
 end))
+
 getgenv().BabylonDefense = {
 cfg = CFG,
 stop = function()
@@ -3890,6 +4156,7 @@ clearWatch = function() CFG.watchName = nil end,
 }
 table.insert(stops, function() if getgenv().BabylonDefense then getgenv().BabylonDefense.stop() end end)
 end)
+
 run("Crosshair", function()
 local GuiService = game:GetService("GuiService")
 local CFG = {
@@ -3906,21 +4173,25 @@ Color3.fromRGB(80, 255, 140), Color3.fromRGB(255, 70, 70), Color3.fromRGB(255, 2
 Color3.fromRGB(80, 200, 255), Color3.fromRGB(255, 220, 60),
 }
 local paletteIndex = 1
+
 local gui = Instance.new("ScreenGui")
 gui.Name = "BabylonCrosshair"
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = false
 gui.DisplayOrder = 990 -- below the Babylon menu (999) so the menu is never covered
 gui.Parent = uiParent
+
 local holder = Instance.new("Frame")
 holder.Size = UDim2.new(1, 0, 1, 0)
 holder.BackgroundTransparency = 1
 holder.Active = false
 holder.Parent = gui
+
 local center = Instance.new("Frame") -- an invisible point that follows the mouse
 center.Size = UDim2.fromOffset(0, 0)
 center.BackgroundTransparency = 1
 center.Parent = holder
+
 local parts = {}
 local function part()
 local f = Instance.new("Frame")
@@ -3936,6 +4207,7 @@ table.insert(parts, f)
 return f
 end
 local top, bottom, left, right, dot = part(), part(), part(), part(), part()
+
 local sL, sG, sT, sD, sC
 local function layout()
 local L, G, T = CFG.length, CFG.gap, CFG.thickness
@@ -3955,6 +4227,7 @@ dot.Visible = CFG.dot
 for _, p in ipairs(parts) do p.BackgroundColor3 = CFG.color end
 end
 layout()
+
 local conns = {}
 table.insert(conns, RunService.RenderStepped:Connect(function()
 gui.Enabled = CFG.enabled
@@ -3964,11 +4237,13 @@ local m = UIS:GetMouseLocation()
 local inset = GuiService:GetGuiInset()
 center.Position = UDim2.fromOffset(m.X - inset.X, m.Y - inset.Y)
 end))
+
 table.insert(conns, UIS.InputBegan:Connect(function(input, processed)
 if processed or input.KeyCode ~= CFG.key then return end
 CFG.enabled = not CFG.enabled
 toast("Crosshair " .. (CFG.enabled and "ON" or "OFF"))
 end))
+
 getgenv().BabylonCrosshair = {
 cfg = CFG,
 nextColor = function()
@@ -3983,6 +4258,7 @@ end,
 }
 table.insert(stops, function() if getgenv().BabylonCrosshair then getgenv().BabylonCrosshair.stop() end end)
 end)
+
 run("Menu", function()
 local THEME = {
 bg = Color3.fromRGB(11, 11, 19),
@@ -4001,23 +4277,28 @@ local menuKey = Enum.KeyCode.RightShift
 local conns, syncs = {}, {}
 local activeSlider = nil
 local listening = nil
+
 local function corner(o, r)
 local c = Instance.new("UICorner")
 c.CornerRadius = UDim.new(0, r or 8)
 c.Parent = o
 end
+
 local function mk(class, props, parent)
 local o = Instance.new(class)
 for k, v in pairs(props) do o[k] = v end
 o.Parent = parent
 return o
 end
+
 local function execName()
 local ok, name = pcall(function() return identifyexecutor and identifyexecutor() or "unknown" end)
 return tostring(ok and name or "unknown")
 end
+
 toastLabel.ZIndex = 100
 badge.ZIndex = 100
+
 local win = mk("Frame", {
 Name = "Window",
 AnchorPoint = Vector2.new(0.5, 0.5),
@@ -4034,10 +4315,12 @@ local winScale = mk("UIScale", { Scale = splash.active and 0.9 or 1 }, win)
 mk("UIGradient", { Color = ColorSequence.new(Color3.fromRGB(19, 14, 36), Color3.fromRGB(8, 8, 15)), Rotation = 65 }, win)
 local winStroke = mk("UIStroke", { Thickness = 1.6, Color = Color3.new(1, 1, 1), Transparency = 0.1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, win)
 spin(accentGradient(winStroke, 0), 50, win)
+
 local top = mk("Frame", { Name = "Top", Size = UDim2.new(1, 0, 0, 46), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0 }, win)
 mk("UIGradient", { Color = ColorSequence.new(Color3.fromRGB(30, 22, 56), Color3.fromRGB(15, 15, 26)), Rotation = 0 }, top)
 local line = mk("Frame", { Position = UDim2.new(0, 0, 0, 46), Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0 }, win)
 spin(accentGradient(line, 0), 60, win)
+
 local dot = mk("Frame", { Size = UDim2.new(0, 10, 0, 10), Position = UDim2.new(0, 16, 0.5, -5), BackgroundColor3 = THEME.accent2, BorderSizePixel = 0 }, top)
 corner(dot, 5)
 pcall(function()
@@ -4091,6 +4374,7 @@ AutoButtonColor = false,
 corner(hideBtn, 7)
 table.insert(conns, hideBtn.MouseEnter:Connect(function() tween(hideBtn, 0.12, { BackgroundColor3 = THEME.hover }) end))
 table.insert(conns, hideBtn.MouseLeave:Connect(function() tween(hideBtn, 0.12, { BackgroundColor3 = THEME.item }) end))
+
 local side = mk("Frame", { Position = UDim2.new(0, 0, 0, 47), Size = UDim2.new(0, 142, 1, -47), BackgroundColor3 = THEME.side, BorderSizePixel = 0 }, win)
 mk("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, side)
 mk("UIPadding", { PaddingTop = UDim.new(0, 10), PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, side)
@@ -4106,6 +4390,7 @@ Font = Enum.Font.GothamBold,
 TextSize = 13,
 TextColor3 = THEME.sub,
 }, win)
+
 local menuOpen = not splash.active
 local menuToken = 0
 local function setMenu(show)
@@ -4124,6 +4409,7 @@ end)
 end
 end
 onIntroDone = function() setMenu(true) end
+
 local dragging, dragStart, startPos = false, nil, nil
 table.insert(conns, top.InputBegan:Connect(function(input)
 if input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -4147,6 +4433,7 @@ dragging = false
 activeSlider = nil
 end
 end))
+
 local pages, tabButtons, tabBars = {}, {}, {}
 local currentTab = nil
 local function selectTab(name)
@@ -4168,6 +4455,7 @@ tabBars[n].Visible = sel
 end
 currentTab = name
 end
+
 local tabCount = 0
 local function newTab(name)
 tabCount += 1
@@ -4213,12 +4501,14 @@ end))
 table.insert(conns, btn.MouseButton1Click:Connect(function() selectTab(name) end))
 return page
 end
+
 local function row(page, h)
 local r = mk("Frame", { Size = UDim2.new(1, 0, 0, h or 40), BackgroundColor3 = THEME.item, BorderSizePixel = 0 }, page)
 corner(r, 9)
 mk("UIStroke", { Color = THEME.line, Thickness = 1, Transparency = 0.35, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, r)
 return r
 end
+
 local function nameLabel(r, text)
 return mk("TextLabel", {
 Position = UDim2.new(0, 14, 0, 0),
@@ -4231,6 +4521,7 @@ TextSize = 14,
 TextColor3 = THEME.text,
 }, r)
 end
+
 local function infoLabel(page, text, h)
 local r = row(page, h or 30)
 mk("TextLabel", {
@@ -4246,6 +4537,7 @@ TextColor3 = THEME.sub,
 }, r)
 return r
 end
+
 local function addToggle(page, text, getter, setter)
 local r = row(page)
 nameLabel(r, text)
@@ -4283,10 +4575,12 @@ local v = getter() and true or false
 if v ~= state then state = v render(v, true) end
 end)
 end
+
 local function fmt(v)
 if v == math.floor(v) then return tostring(v) end
 return string.format("%.1f", v)
 end
+
 local function addSlider(page, text, min, max, step, getter, setter)
 local r = row(page, 54)
 mk("TextLabel", {
@@ -4344,6 +4638,7 @@ local v = getter()
 if v ~= shown then render(v) end
 end)
 end
+
 local function addButton(page, text, callback)
 local r = row(page)
 local b = mk("TextButton", {
@@ -4379,6 +4674,7 @@ task.delay(0.08, function() tween(r, 0.25, { BackgroundColor3 = THEME.hover }) e
 pcall(callback)
 end))
 end
+
 local function addKeybind(page, text, getter, setter)
 local r = row(page)
 nameLabel(r, text)
@@ -4412,6 +4708,7 @@ end
 end))
 table.insert(syncs, function() if not listening then render() end end)
 end
+
 table.insert(conns, UIS.InputBegan:Connect(function(input, processed)
 if listening and input.UserInputType == Enum.UserInputType.Keyboard then
 local cb = listening
@@ -4423,7 +4720,9 @@ if processed then return end
 if input.KeyCode == menuKey and not (splash.active and not menuOpen and ui:FindFirstChild("Intro")) then setMenu(not menuOpen) end
 end))
 table.insert(conns, hideBtn.MouseButton1Click:Connect(function() setMenu(false) end))
+
 local function api(name) return getgenv()[name] end
+
 local gate = newTab("Gate")
 addToggle(gate, "Gate of Babylon", function() local g = api("FloatGuns") return g and g.isOn and g.isOn() end, function(v) local g = api("FloatGuns") if g then g.set(v) end end)
 addKeybind(gate, "Toggle key", function() local g = api("FloatGuns") return g and g.cfg.toggleKey or Enum.KeyCode.G end, function(k) local g = api("FloatGuns") if g then g.cfg.toggleKey = k end end)
@@ -4434,6 +4733,7 @@ addSlider(gate, "Guns per row", 2, 12, 1, function() local g = api("FloatGuns") 
 addToggle(gate, "Reload all guns together", function() local g = api("FloatGuns") return g and g.cfg.reloadAll end, function(v) local g = api("FloatGuns") if g then g.cfg.reloadAll = v end end)
 addToggle(gate, "No camera recoil (screen shake)", function() local g = api("FloatGuns") return g and g.cfg.noRecoil end, function(v) local g = api("FloatGuns") if g then g.setNoRecoil(v) end end)
 infoLabel(gate, "Takes effect when you equip a gun. If a gun ever will not fire, turn this off, rejoin, and tell the owner.", 44)
+
 local fuga = newTab("Fuga")
 addToggle(fuga, "Fuga ring (Molotovs)", function() local f = api("FugaRing") return f and f.isOn and f.isOn() end, function(v) local f = api("FugaRing") if f then f.set(v) end end)
 addKeybind(fuga, "Toggle key", function() local f = api("FugaRing") return f and f.cfg.key or Enum.KeyCode.Z end, function(k) local f = api("FugaRing") if f then f.cfg.key = k end end)
@@ -4449,7 +4749,7 @@ local f = api("FugaRing")
 if f then toast("Formation: " .. f.nextFormation()) end
 end)
 addToggle(fuga, "Arm pose while spraying (others see it)", function() local f = api("FugaRing") return f and f.cfg.pose end, function(v) local f = api("FugaRing") if f then f.cfg.pose = v end end)
-addToggle(fuga, "See other players' Fuga show (needs their chat lines)", function() local f = api("FugaRing") return f and f.cfg.watch end, function(v) local f = api("FugaRing") if f then f.cfg.watch = v end end)
+addToggle(fuga, "See other players' Fuga show (when they spray Molotovs)", function() local f = api("FugaRing") return f and f.cfg.watch end, function(v) local f = api("FugaRing") if f then f.cfg.watch = v end end)
 addToggle(fuga, "Say Kai. / FUGA. in chat (lets script users see your show)", function() local f = api("FugaRing") return f and f.cfg.chat end, function(v) local f = api("FugaRing") if f then f.cfg.chat = v end end)
 addButton(fuga, "Preview the look (throws nothing)", function() local f = api("FugaRing") if f then f.preview() end end)
 addSlider(fuga, "Safe distance (studs)", 10, 80, 1, function() local f = api("FugaRing") return f and f.cfg.safeDistance or 25 end, function(v) local f = api("FugaRing") if f then f.cfg.safeDistance = v end end)
@@ -4458,6 +4758,7 @@ addSlider(fuga, "Spin speed", 0.5, 5, 0.1, function() local f = api("FugaRing") 
 addSlider(fuga, "Charge-up (seconds)", 0.1, 1.5, 0.05, function() local f = api("FugaRing") return f and f.cfg.chargeTime or 0.45 end, function(v) local f = api("FugaRing") if f then f.cfg.chargeTime = v end end)
 addSlider(fuga, "Lean outwards (degrees)", 0, 80, 1, function() local f = api("FugaRing") return f and f.cfg.tilt or 40 end, function(v) local f = api("FugaRing") if f then f.cfg.tilt = v end end)
 infoLabel(fuga, "Buy Molotovs at Banmin. With the ring on they float around you in a spinning circle of fire. Hold the left mouse button to spray them one after another like a machine gun, aiming with your cursor. Each Molotov lands where your cursor was when it left the ring. Each throw uses up one Molotov. Separate from the Gate (guns).", 84)
+
 local items = newTab("Items")
 addButton(items, "Open pawn / weapon shop", function() local o = api("OpenShop") if o then o.run(o.cfg.shops[1]) end end)
 addKeybind(items, "Shop key", function() local o = api("OpenShop") return o and o.cfg.key or Enum.KeyCode.P end, function(k) local o = api("OpenShop") if o then o.cfg.key = k end end)
@@ -4478,6 +4779,7 @@ addKeybind(items, "Auto-walk key", function() local b = api("BringGuns") return 
 addToggle(items, "  Include guns", function() local b = api("BringGuns") return b and b.cfg.guns end, function(v) local b = api("BringGuns") if b then b.cfg.guns = v end end)
 addToggle(items, "  Include melee weapons", function() local b = api("BringGuns") return b and b.cfg.melee end, function(v) local b = api("BringGuns") if b then b.cfg.melee = v end end)
 infoLabel(items, "Selling only works while you stand at the pawn shop, so Go to pawn shop and sell walks you there, sells, and goes back to the AFK walk. Auto-walk keeps walking you to the next weapon pickup along a real path until you switch it off. The single walk stops when you press it again or move. The game does not allow teleporting.", 58)
+
 local shopsTab = newTab("Shops")
 do
 local o = api("OpenShop")
@@ -4490,6 +4792,7 @@ end
 end
 end
 infoLabel(shopsTab, "Opens that shop's screen from anywhere. Food shops are where you buy items to heal. Prices and whether a purchase works are decided by the game, not by this menu.", 58)
+
 local move = newTab("Movement")
 addToggle(move, "Speed boost", function() local s = api("BabylonSpeed") return s and s.cfg.enabled end, function(v) local s = api("BabylonSpeed") if s and s.cfg.enabled ~= v then s.toggle() end end)
 do
@@ -4510,16 +4813,19 @@ lbl.Text = "Above 28 you slow to 28 while shooting. The server pulls you back ab
 end
 end)
 end
+
 addToggle(move, "Higher jump (from the ground)", function() local j = api("BabylonJump") return j and j.cfg.boost end, function(v) local j = api("BabylonJump") if j then j.cfg.boost = v end end)
 addSlider(move, "Jump power (game default is about 50)", 50, 300, 5, function() local j = api("BabylonJump") return j and j.cfg.groundPower or 95 end, function(v) local j = api("BabylonJump") if j then j.cfg.groundPower = v end end)
 addSlider(move, "Air jump power (infinite jump)", 30, 200, 2, function() local j = api("BabylonJump") return j and j.cfg.jumpPower or 44 end, function(v) local j = api("BabylonJump") if j then j.cfg.jumpPower = v end end)
 addToggle(move, "Infinite jump", function() local j = api("BabylonJump") return j and j.cfg.infinite end, function(v) local j = api("BabylonJump") if j then j.cfg.infinite = v end end)
 addKeybind(move, "Infinite jump key", function() local j = api("BabylonJump") return j and j.cfg.key or Enum.KeyCode.J end, function(k) local j = api("BabylonJump") if j then j.cfg.key = k end end)
 addToggle(move, "Soft landing (fall damage)", function() local j = api("BabylonJump") return j and j.cfg.softLanding end, function(v) local j = api("BabylonJump") if j then j.cfg.softLanding = v end end)
+
 addToggle(move, "Show air time", function() local j = api("BabylonJump") return j and j.cfg.showAirTime end, function(v) local j = api("BabylonJump") if j then j.cfg.showAirTime = v end end)
 addToggle(move, "Auto-land before the limit", function() local j = api("BabylonJump") return j and j.cfg.autoLand end, function(v) local j = api("BabylonJump") if j then j.cfg.autoLand = v end end)
 addSlider(move, "Be on the ground by (seconds)", 1, 4.8, 0.2, function() local j = api("BabylonJump") return j and j.cfg.landAt or 4.2 end, function(v) local j = api("BabylonJump") if j then j.cfg.landAt = v end end)
 addButton(move, "Reset best air time", function() local j = api("BabylonJump") if j then j.resetBest() end end)
+
 local vis = newTab("Visuals")
 addToggle(vis, "Player ESP", function() local e = api("BabylonESP") return e and e.isOn and e.isOn() end, function(v) local e = api("BabylonESP") if e and e.isOn() ~= v then e.toggle() end end)
 addKeybind(vis, "ESP key", function() local e = api("BabylonESP") return e and e.cfg.key or Enum.KeyCode.L end, function(k) local e = api("BabylonESP") if e then e.cfg.key = k end end)
@@ -4539,6 +4845,7 @@ addSlider(vis, "Crosshair gap", 0, 20, 1, function() local c = api("BabylonCross
 addSlider(vis, "Crosshair thickness", 1, 5, 1, function() local c = api("BabylonCrosshair") return c and c.cfg.thickness or 2 end, function(v) local c = api("BabylonCrosshair") if c then c.cfg.thickness = v end end)
 addToggle(vis, "Crosshair centre dot", function() local c = api("BabylonCrosshair") return c and c.cfg.dot end, function(v) local c = api("BabylonCrosshair") if c then c.cfg.dot = v end end)
 addButton(vis, "Next crosshair colour", function() local c = api("BabylonCrosshair") if c then c.nextColor() end end)
+
 local def = newTab("Defense")
 addToggle(def, "Armed-player warning", function() local d = api("BabylonDefense") return d and d.cfg.warn end, function(v) local d = api("BabylonDefense") if d then d.cfg.warn = v end end)
 addSlider(def, "Warning distance", 20, 200, 5, function() local d = api("BabylonDefense") return d and d.cfg.warnRadius or 70 end, function(v) local d = api("BabylonDefense") if d then d.cfg.warnRadius = v end end)
@@ -4562,6 +4869,7 @@ end)
 addButton(def, "Stop watching", function() local d = api("BabylonDefense") if d then d.clearWatch() end end)
 addSlider(def, "Alert distance", 20, 200, 5, function() local d = api("BabylonDefense") return d and d.cfg.alertRadius or 60 end, function(v) local d = api("BabylonDefense") if d then d.cfg.alertRadius = v end end)
 addKeybind(def, "Panic key (run away)", function() local d = api("BabylonDefense") return d and d.cfg.panicKey or Enum.KeyCode.B end, function(k) local d = api("BabylonDefense") if d then d.cfg.panicKey = k end end)
+
 local info = newTab("Info")
 do
 local cr = infoLabel(info, "", 44)
@@ -4594,7 +4902,9 @@ local all = getgenv().BabylonAll
 if all then all.stop() end
 end)
 end)
+
 selectTab("Gate")
+
 local acc = 0
 table.insert(conns, RunService.Heartbeat:Connect(function(dt)
 acc += dt
@@ -4603,11 +4913,13 @@ acc = 0
 if not menuOpen then return end -- window hidden: nothing on screen to keep up to date
 for _, fn in ipairs(syncs) do pcall(fn) end
 end))
+
 table.insert(stops, function()
 for _, c in ipairs(conns) do c:Disconnect() end
 table.clear(conns)
 end)
 end)
+
 getgenv().BabylonAll = {
 stop = function()
 for _, fn in ipairs(stops) do pcall(fn) end
@@ -4616,6 +4928,7 @@ ui:Destroy()
 getgenv().BabylonAll = nil
 end,
 }
+
 do
 local ok, name = pcall(function() return identifyexecutor and identifyexecutor() or "unknown" end)
 local fg = getgenv().FloatGuns
@@ -4624,6 +4937,7 @@ badge.Text = "Babylon injected (" .. tostring(ok and name or "unknown") .. ")   
 badge.Size = UDim2.new(0, 330, 0, 26)
 print("[Babylon] executor=" .. tostring(ok and name or "unknown") .. " noRecoil=" .. recoil)
 end
+
 splash.finish(function()
 badge.Visible = true
 pcall(onIntroDone)
@@ -4636,6 +4950,7 @@ else
 toast("Babylon injected. RightShift opens the menu")
 end
 end)
+
 if KS.url ~= "" then
 local me = getgenv().BabylonAll
 task.spawn(function()
@@ -4651,6 +4966,7 @@ end
 end
 end)
 end
+
 ]==]
 
 local fn, compileErr = loadstring(SRC, "=Babylon")
