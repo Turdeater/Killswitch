@@ -34,6 +34,7 @@ end
 
 local SRC = [==[
 
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
@@ -994,7 +995,11 @@ CFG.shotFile = "gate_shot"
 CFG.shotMaxLen = 1.4
 CFG.swordSpeed = 340
 CFG.swordRange = 450
-CFG.maxSwords = 110
+CFG.maxSwords = 130
+CFG.sky = true            -- a field of big golden gates in the sky behind whoever has the gate open
+CFG.skyGates = 10         -- how many sky gates
+CFG.skyBarrage = 2        -- extra swords from the sky gates on every shot
+CFG.bodyAura = true       -- gold outline and sparkles around whoever has the gate open
 CFG.watchRange = 400      -- how far away (studs) other players' gates are drawn
 CFG.watchOthers = true    -- see the portals and swords of other players who run this script (they must have 2+ guns out)
 
@@ -1209,6 +1214,16 @@ dbg("shot", tool.Name, why)
 if fireTool then fireTool(tool) end
 end
 
+local function hasAmmoAttr(tool)
+for name, v in pairs(tool:GetAttributes()) do
+local n = name:lower()
+if type(v) == "number" and (n:find("ammo", 1, true) or n:find("mag", 1, true) or n:find("bullet", 1, true) or n:find("clip", 1, true)) then
+return true
+end
+end
+return false
+end
+
 local function mouseRecent()
 return UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) or os.clock() - mouseUpAt < 0.7
 end
@@ -1300,22 +1315,28 @@ cfParts[n] = part
 cfValues[n] = cf
 end
 
-local function lod(n)
+local function lod(n, sky)
+if sky then return 10, 0, false, 0 end
 if n <= 6 then return 22, 8, true, 14
 elseif n <= 14 then return 14, 6, false, 6
 else return 9, 0, false, 0 end
 end
 
-local function newPortal(tool, n)
+local flares = {}
+
+local function newPortal(tool, n, sky)
 portalOrder += 1
-local segN, tickN, star, rate = lod(n)
+local segN, tickN, star, rate = lod(n, sky)
 local P = {
 tool = tool, id = portalOrder, born = os.clock() + math.min(portalOrder % 14, 13) * 0.035,
-closing = false, closedAt = 0, kick = 0, pulseAt = os.clock() + math.random() * 1.3,
-pos = Vector3.zero, dir = Vector3.new(0, 0, -1), scale = 0, ringA = {}, ringB = {}, ticks = {}, starA = {},
+closing = false, closedAt = 0, kick = 0, pulseAt = os.clock() + math.random() * 1.3, flareAt = os.clock() + math.random() * 2,
+pos = Vector3.zero, dir = Vector3.new(0, 0, -1), scale = 0, ringA = {}, ringB = {}, ticks = {}, starA = {}, rip = {},
+sky = sky and true or false, sizeMul = 1,
 }
-P.core = mkPart("cyl", Vector3.new(0.1, 1, 1), GOLD, 0.22)
+P.core = mkPart("cyl", Vector3.new(0.1, 1, 1), GOLD, sky and 0.6 or 0.45)
+P.hot = mkPart("cyl", Vector3.new(0.07, 1, 1), GOLD_HI, 0.35)
 P.halo = mkPart("cyl", Vector3.new(0.06, 1, 1), GOLD, 0.84)
+for i = 1, (sky and 2 or 4) do P.rip[i] = mkPart("cyl", Vector3.new(0.05, 1, 1), GOLD_HI, 0.8) end
 for i = 1, segN do P.ringA[i] = mkPart("block", Vector3.new(0.4, 0.07, 0.07), GOLD_HI, 0) end
 for i = 1, math.max(6, math.floor(segN * 0.75)) do P.ringB[i] = mkPart("block", Vector3.new(0.4, 0.12, 0.12), GOLD, 0.1) end
 for i = 1, tickN do P.ticks[i] = mkPart("block", Vector3.new(0.4, 0.08, 0.08), GOLD, 0.05) end
@@ -1338,7 +1359,7 @@ pcall(function() e.Shape = Enum.ParticleEmitterShape.Disc e.ShapeStyle = Enum.Pa
 e.Parent = P.core
 P.emitter = e
 end
-if n <= 8 then
+if n <= 8 and not sky then
 local l = Instance.new("PointLight")
 l.Color = GOLD
 l.Range = 14
@@ -1352,7 +1373,8 @@ end
 local function destroyPortal(P)
 pcall(function() P.core:Destroy() end)
 pcall(function() P.halo:Destroy() end)
-for _, group in ipairs({ P.ringA, P.ringB, P.ticks, P.starA }) do
+if P.hot then pcall(function() P.hot:Destroy() end) end
+for _, group in ipairs({ P.ringA, P.ringB, P.ticks, P.starA, P.rip }) do
 for _, p in ipairs(group) do pcall(function() p:Destroy() end) end
 end
 end
@@ -1383,17 +1405,28 @@ local a = math.clamp((now - P.born) / 0.5, 0, 1)
 P.scale = a <= 0 and 0 or backOut(a)
 open = a
 end
-P.kick = math.max(0, P.kick - (1 / 0.22) * (1 / 60))
+P.kick = math.max(0, P.kick - (now - (P.lastT or now)) / 0.22)
+P.lastT = now
 local s = math.max(P.scale, 0.001)
-local D = CFG.portalSize * s * (1 + 0.035 * math.sin(now * 7 + P.id)) * (1 + 0.3 * P.kick)
+local D = CFG.portalSize * P.sizeMul * s * (1 + 0.035 * math.sin(now * 7 + P.id)) * (1 + 0.3 * P.kick)
 local F = CFrame.lookAt(P.pos, P.pos + P.dir)
 local disc = CFrame.Angles(0, math.pi / 2, 0)
 P.core.Size = Vector3.new(0.1, D, D)
-P.core.Transparency = 0.22 - 0.14 * P.kick
+P.core.Transparency = (P.sky and 0.6 or 0.45) - 0.3 * P.kick
 addCF(P.core, F * disc)
+P.hot.Size = Vector3.new(0.07, D * 0.5, D * 0.5)
+P.hot.Transparency = 0.4 + 0.1 * math.sin(now * 5 + P.id) - 0.3 * P.kick
+addCF(P.hot, F * CFrame.new(0, 0, -0.03) * disc)
 P.halo.Size = Vector3.new(0.06, D * 1.3, D * 1.3)
 P.halo.Transparency = 0.84 - 0.2 * P.kick
 addCF(P.halo, F * CFrame.new(0, 0, 0.05) * disc)
+for i, p in ipairs(P.rip) do
+local ph = (now * 0.7 + (i % 2) * 0.5 + (i > 2 and 0.25 or 0) + P.id * 0.137) % 1
+local d = D * (0.1 + 0.9 * ph)
+p.Size = Vector3.new(0.05, d, d)
+p.Transparency = 0.2 + 0.8 * ph
+addCF(p, F * CFrame.new(0, 0, i % 2 == 1 and -0.08 or 0.1) * disc)
+end
 local th = now * 0.85 + P.id
 placeRing(P.ringA, F, D * 0.53, th * 0.6, 0.07, false)
 placeRing(P.ringB, F, D * 0.74, -th, 0.12, true)
@@ -1418,35 +1451,139 @@ end
 end
 end
 if P.light then P.light.Brightness = (0.7 + 1.5 * P.kick) * open end
-if not P.closing and open >= 1 and now >= P.pulseAt and #pulses < 40 then
+if not P.closing and open >= 1 then
+if now >= P.pulseAt and #pulses < 40 then
 P.pulseAt = now + 1.25 + math.random() * 0.7
 local pp = mkPart("cyl", Vector3.new(0.05, D, D), GOLD, 0.5)
-table.insert(pulses, { part = pp, born = now, life = 1.1, pos = P.pos, dir = P.dir, base = CFG.portalSize })
+table.insert(pulses, { part = pp, born = now, life = 1.1, pos = P.pos, dir = P.dir, base = CFG.portalSize * P.sizeMul })
+end
+if now >= P.flareAt and #flares < 26 then
+P.flareAt = now + 0.9 + math.random() * 1.6
+local a = math.random() * 2 * math.pi
+local r = D * (0.45 + math.random() * 0.25)
+local fpos = (F * CFrame.new(math.cos(a) * r, math.sin(a) * r, -0.12)).Position
+table.insert(flares, {
+p1 = mkPart("block", Vector3.new(0.1, 0.07, 0.07), Color3.new(1, 1, 1), 0),
+p2 = mkPart("block", Vector3.new(0.1, 0.07, 0.07), Color3.new(1, 1, 1), 0),
+cf = F * CFrame.new(math.cos(a) * r, math.sin(a) * r, -0.12), born = now, life = 0.4, size = D * 0.55,
+})
+end
 end
 end
 
-local function addWeapon(def, list, root, sc)
-for _, d in ipairs(def) do
-local p = mkPart(d.kind, d.size * sc, d.color, d.transp or 0, d.mat)
-table.insert(list, { part = p, off = CFrame.new(d.off * sc) * (d.rot or CFrame.new()) })
+local function updateFlares(now)
+for i = #flares, 1, -1 do
+local q = flares[i]
+local a = (now - q.born) / q.life
+if a >= 1 then
+pcall(function() q.p1:Destroy() end)
+pcall(function() q.p2:Destroy() end)
+table.remove(flares, i)
+else
+local len = q.size * math.sin(a * math.pi) + 0.02
+q.p1.Size = Vector3.new(len, 0.07, 0.07)
+q.p2.Size = Vector3.new(0.07, len * 0.7, 0.07)
+local rot = CFrame.Angles(0, 0, a * 1.2)
+addCF(q.p1, q.cf * rot)
+addCF(q.p2, q.cf * rot)
+end
 end
 end
 
-local SWORD = {
-{ kind = "block", size = Vector3.new(0.34, 0.07, 3.2), off = Vector3.new(0, 0, -2.7), color = GOLD_HI },
-{ kind = "wedge", size = Vector3.new(0.07, 0.34, 0.9), off = Vector3.new(0, 0, -4.75), color = GOLD_HI, rot = CFrame.new() },
-{ kind = "block", size = Vector3.new(1.2, 0.16, 0.22), off = Vector3.new(0, 0, -1.05), color = GOLD },
-{ kind = "block", size = Vector3.new(0.16, 0.16, 1.0), off = Vector3.new(0, 0, -0.5), color = GOLD_DK },
-{ kind = "ball", size = Vector3.new(0.32, 0.32, 0.32), off = Vector3.new(0, 0, 0.05), color = GOLD },
-{ kind = "block", size = Vector3.new(0.9, 0.9, 5.4), off = Vector3.new(0, 0, -2.9), color = GOLD, transp = 0.94 },
+local GEMS = { Color3.fromRGB(235, 40, 60), Color3.fromRGB(60, 150, 255), Color3.fromRGB(60, 230, 140), Color3.fromRGB(190, 80, 255) }
+local FLIP = CFrame.Angles(0, 0, math.pi)
+local function addWeapon(entry, list, sc)
+local gem = GEMS[math.random(#GEMS)]
+local function add(kind, size, pos, color, tr, mat, rot)
+local p = mkPart(kind, size * sc, color, tr or 0, mat)
+table.insert(list, { part = p, off = CFrame.new(pos * sc) * (rot or CFrame.identity) })
+end
+for _, d in ipairs(entry.parts) do
+local color = d.gem and gem or (d.c or GOLD_HI)
+if d[1] == "tip" then
+local s, pos = d[2], d[3]
+local half = Vector3.new(s.X, s.Y / 2, s.Z)
+add("wedge", half, pos + Vector3.new(0, s.Y / 4, 0), color, d.t, d.m)
+add("wedge", half, pos - Vector3.new(0, s.Y / 4, 0), color, d.t, d.m, FLIP)
+else
+add(d[1], d[2], d[3], color, d.t, d.m)
+end
+end
+end
+local V = Vector3.new
+local PALE = Color3.fromRGB(255, 245, 215)
+local ARMORY = {
+{ name = "sword", w = 30, len = 5.3, sc = { 0.8, 1.2 }, roll = 0, parts = {
+{ "block", V(0.07, 0.36, 3.3), V(0, 0, -2.8) },
+{ "block", V(0.04, 0.12, 3.3), V(0, 0, -2.8), c = PALE },
+{ "tip", V(0.07, 0.36, 0.9), V(0, 0, -4.9) },
+{ "block", V(0.2, 1.3, 0.24), V(0, 0, -1.05), c = GOLD },
+{ "ball", V(0.22, 0.22, 0.22), V(0, 0.62, -1.05), gem = true },
+{ "ball", V(0.22, 0.22, 0.22), V(0, -0.62, -1.05), gem = true },
+{ "block", V(0.16, 0.16, 1.0), V(0, 0, -0.5), c = GOLD_DK },
+{ "ball", V(0.32, 0.32, 0.32), V(0, 0, 0.05), c = GOLD },
+} },
+{ name = "greatsword", w = 9, len = 5.3, sc = { 1.5, 1.9 }, roll = 0, parts = {
+{ "block", V(0.09, 0.55, 3.3), V(0, 0, -2.8) },
+{ "block", V(0.05, 0.18, 3.3), V(0, 0, -2.8), c = PALE },
+{ "tip", V(0.09, 0.55, 0.9), V(0, 0, -4.9) },
+{ "block", V(0.28, 1.8, 0.28), V(0, 0, -1.05), c = GOLD },
+{ "ball", V(0.3, 0.3, 0.3), V(0, 0.85, -1.05), gem = true },
+{ "ball", V(0.3, 0.3, 0.3), V(0, -0.85, -1.05), gem = true },
+{ "ball", V(0.34, 0.34, 0.34), V(0, 0, -1.05), gem = true },
+{ "block", V(0.2, 0.2, 1.0), V(0, 0, -0.5), c = GOLD_DK },
+{ "ball", V(0.4, 0.4, 0.4), V(0, 0, 0.05), c = GOLD },
+} },
+{ name = "spear", w = 22, len = 8.3, sc = { 0.85, 1.25 }, roll = 0, parts = {
+{ "block", V(0.13, 0.13, 5.8), V(0, 0, -2.9), c = GOLD_DK, m = Enum.Material.Metal },
+{ "block", V(0.07, 0.6, 1.5), V(0, 0, -6.55) },
+{ "tip", V(0.07, 0.6, 1.0), V(0, 0, -7.8) },
+{ "block", V(0.34, 0.34, 0.3), V(0, 0, -5.75), c = GOLD },
+{ "ball", V(0.22, 0.22, 0.22), V(0, 0.18, -5.75), gem = true },
+{ "ball", V(0.26, 0.26, 0.26), V(0, 0, 0.05), c = GOLD },
+} },
+{ name = "axe", w = 14, len = 4.5, sc = { 0.9, 1.3 }, roll = 9, parts = {
+{ "block", V(0.14, 0.14, 3.8), V(0, 0, -1.9), c = GOLD_DK, m = Enum.Material.Metal },
+{ "block", V(0.1, 1.7, 1.0), V(0, 0, -3.7) },
+{ "block", V(0.06, 1.95, 0.12), V(0, 0, -4.25), c = PALE },
+{ "ball", V(0.3, 0.3, 0.3), V(0.1, 0, -3.6), gem = true },
+{ "ball", V(0.26, 0.26, 0.26), V(0, 0, 0.05), c = GOLD },
+} },
+{ name = "dagger", w = 12, len = 3.4, sc = { 0.9, 1.3 }, roll = 0, parts = {
+{ "block", V(0.06, 0.26, 1.7), V(0, 0, -1.9) },
+{ "tip", V(0.06, 0.26, 0.6), V(0, 0, -3.05) },
+{ "block", V(0.12, 0.8, 0.18), V(0, 0, -0.95), c = GOLD },
+{ "block", V(0.12, 0.12, 0.7), V(0, 0, -0.45), c = GOLD_DK },
+{ "ball", V(0.25, 0.25, 0.25), V(0, 0, 0.05), gem = true },
+} },
+{ name = "mace", w = 8, len = 5.0, sc = { 0.9, 1.2 }, roll = 7, parts = {
+{ "block", V(0.15, 0.15, 3.4), V(0, 0, -1.7), c = GOLD_DK, m = Enum.Material.Metal },
+{ "ball", V(1.0, 1.0, 1.0), V(0, 0, -3.9), c = GOLD },
+{ "block", V(0.5, 0.12, 0.12), V(0.7, 0, -3.9) },
+{ "block", V(0.5, 0.12, 0.12), V(-0.7, 0, -3.9) },
+{ "block", V(0.12, 0.5, 0.12), V(0, 0.7, -3.9) },
+{ "block", V(0.12, 0.5, 0.12), V(0, -0.7, -3.9) },
+{ "block", V(0.12, 0.12, 0.5), V(0, 0, -4.6) },
+{ "ball", V(0.3, 0.3, 0.3), V(0, 0, -3.9), gem = true },
+} },
+{ name = "halberd", w = 6, len = 8.8, sc = { 0.9, 1.2 }, roll = 0, parts = {
+{ "block", V(0.14, 0.14, 6.2), V(0, 0, -3.1), c = GOLD_DK, m = Enum.Material.Metal },
+{ "block", V(0.09, 1.4, 1.0), V(0, 0.5, -6.0) },
+{ "block", V(0.07, 0.45, 1.2), V(0, 0, -7.4) },
+{ "tip", V(0.07, 0.45, 0.8), V(0, 0, -8.4) },
+{ "ball", V(0.26, 0.26, 0.26), V(0, 0, -5.6), gem = true },
+} },
 }
-local SPEAR = {
-{ kind = "block", size = Vector3.new(0.13, 0.13, 5.4), off = Vector3.new(0, 0, -2.7), color = GOLD_DK, mat = Enum.Material.Metal },
-{ kind = "block", size = Vector3.new(0.5, 0.07, 1.3), off = Vector3.new(0, 0, -5.9), color = GOLD_HI },
-{ kind = "wedge", size = Vector3.new(0.07, 0.5, 0.9), off = Vector3.new(0, 0, -6.95), color = GOLD_HI },
-{ kind = "block", size = Vector3.new(0.3, 0.3, 0.3), off = Vector3.new(0, 0, -5.2), color = GOLD },
-{ kind = "block", size = Vector3.new(0.9, 0.9, 7.2), off = Vector3.new(0, 0, -3.6), color = GOLD, transp = 0.94 },
-}
+local ARMORY_TOTAL = 0
+for _, a in ipairs(ARMORY) do ARMORY_TOTAL += a.w end
+local function pickWeapon()
+local r = math.random() * ARMORY_TOTAL
+for _, a in ipairs(ARMORY) do
+r -= a.w
+if r <= 0 then return a end
+end
+return ARMORY[1]
+end
 
 local UPISH = Vector3.new(0.0001, 1, 0).Unit
 local impactEmitters = {}
@@ -1486,16 +1623,14 @@ end
 
 local function spawnSword(P)
 if #swords >= CFG.maxSwords then return end
-local spear = math.random() < 0.3
-local def = spear and SPEAR or SWORD
-local sc = spear and (0.9 + math.random() * 0.4) or (0.8 + math.random() * 0.6)
-local W = { parts = {}, spear = spear, sc = sc, dir = P.dir, born = os.clock(), state = "emerge", len = (spear and 7.4 or 5.2) * sc }
+local entry = pickWeapon()
+local sc = (entry.sc[1] + math.random() * (entry.sc[2] - entry.sc[1])) * (P.sky and 1.4 or 1)
+local W = { parts = {}, sc = sc, dir = P.dir, born = os.clock(), state = "emerge", len = entry.len * sc, spin = entry.roll }
 local jitter = CFrame.Angles((math.random() - 0.5) * 0.05, (math.random() - 0.5) * 0.05, 0)
 W.dir = (CFrame.lookAt(Vector3.zero, P.dir) * jitter).LookVector
 W.start = P.pos - W.dir * (W.len + 0.3) -- fully behind the portal to begin with
-W.cf = CFrame.lookAt(W.start, W.start + W.dir) * CFrame.Angles(0, 0, math.random() * math.pi * 2)
 W.roll = math.random() * math.pi * 2
-addWeapon(def, W.parts, W.cf, sc)
+addWeapon(entry, W.parts, sc)
 if trailCount < 60 and W.parts[1] then
 local blade = W.parts[1].part
 local a0, a1 = Instance.new("Attachment"), Instance.new("Attachment")
@@ -1514,7 +1649,6 @@ W.trail = tr
 trailCount += 1
 end
 W.pos = W.start
-W.tip = W.start + W.dir * W.len
 table.insert(swords, W)
 end
 
@@ -1530,6 +1664,7 @@ local function updateSwords(dt, now)
 for i = #swords, 1, -1 do
 local W = swords[i]
 local age = now - W.born
+if W.spin and W.spin > 0 then W.roll += W.spin * dt end
 if W.state == "emerge" then
 local a = math.clamp(age / 0.16, 0, 1)
 W.pos = W.start + W.dir * (W.len * 0.9 * a * (2 - a))
@@ -1548,11 +1683,11 @@ impact(hit.Position, hit.Normal, W.sc)
 else
 W.pos = W.pos + W.dir * step
 W.flown += step
-if W.flown > CFG.swordRange then W.state = "stuck" W.stuckAt = now - 2.4 W.fade = true end
+if W.flown > CFG.swordRange then W.state = "stuck" W.stuckAt = now - 1.7 W.fade = true end
 end
 else -- stuck, then fades away
 local sa = now - W.stuckAt
-local t = math.clamp((sa - 2.6) / 0.9, 0, 1)
+local t = math.clamp((sa - 1.9) / 0.7, 0, 1)
 if t >= 1 then
 killSword(W)
 table.remove(swords, i)
@@ -1735,7 +1870,7 @@ tintCC = Instance.new("ColorCorrectionEffect")
 tintCC.Name = "GateTint"
 tintCC.Parent = Lighting
 end
-TweenService:Create(tintCC, TweenInfo.new(1.2), { TintColor = Color3.fromRGB(255, 232, 196), Saturation = 0.12, Contrast = 0.04 }):Play()
+TweenService:Create(tintCC, TweenInfo.new(1.2), { TintColor = Color3.fromRGB(255, 240, 214), Saturation = 0.06, Contrast = 0.03 }):Play()
 end
 local function tintOff(instant)
 tintWanted = false
@@ -1803,6 +1938,43 @@ b.LightEmission = 1
 b.Acceleration = Vector3.new(0, -22, 0)
 b.Parent = holder
 A.burst = b
+A.sky = {}
+if CFG.bodyAura and info.ch then
+local hl = Instance.new("Highlight")
+hl.Adornee = info.ch
+hl.FillColor = GOLD
+hl.OutlineColor = GOLD_HI
+hl.FillTransparency = 1
+hl.OutlineTransparency = 1
+hl.DepthMode = Enum.HighlightDepthMode.Occluded
+hl.Parent = folder()
+A.hl = hl
+local body = Instance.new("Part")
+body.Anchored = true body.CanCollide = false body.CanQuery = false body.CanTouch = false
+body.Transparency = 1
+body.Size = Vector3.new(3, 5, 1.6)
+body.Parent = folder()
+A.body = body
+local sp = Instance.new("ParticleEmitter")
+sp.Rate = 0
+sp.Lifetime = NumberRange.new(0.9, 1.7)
+sp.Speed = NumberRange.new(0.5, 2.5)
+sp.SpreadAngle = Vector2.new(25, 25)
+sp.EmissionDirection = Enum.NormalId.Top
+sp.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.26), NumberSequenceKeypoint.new(1, 0) })
+sp.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) })
+sp.Color = ColorSequence.new(GOLD_HI, GOLD)
+sp.LightEmission = 1
+sp.Acceleration = Vector3.new(0, 3, 0)
+sp.Parent = body
+A.bodyE = sp
+local gl = Instance.new("PointLight")
+gl.Color = GOLD
+gl.Range = 22
+gl.Brightness = 0
+gl.Parent = body
+A.bodyL = gl
+end
 return A
 end
 
@@ -1810,8 +1982,12 @@ local function destroyAura(A)
 for _, group in ipairs({ A.outer, A.inner, A.runes, A.tri }) do
 for _, p in ipairs(group) do pcall(function() p:Destroy() end) end
 end
-for _, p in ipairs({ A.disc, A.pillar, A.core, A.holder }) do
+for _, p in ipairs({ A.disc, A.pillar, A.core, A.holder, A.hl, A.body }) do
 if p then pcall(function() p:Destroy() end) end
+end
+if A.sky then
+for _, P in ipairs(A.sky) do destroyPortal(P) end
+table.clear(A.sky)
 end
 end
 
@@ -1903,6 +2079,58 @@ end
 A.holder.Size = Vector3.new(R * 1.5, 0.2, R * 1.5)
 A.holder.CFrame = CFrame.new(c + Vector3.new(0, 0.4, 0))
 A.dust.Rate = A.closing and 0 or math.floor(34 * open)
+if A.hl then
+local glow = 0.5 + 0.5 * math.sin(now * 3.2 + A.spin)
+A.hl.OutlineTransparency = 1 - open * (0.55 + 0.4 * glow)
+A.hl.FillTransparency = 1 - open * (0.06 + 0.1 * glow)
+A.bodyE.Rate = A.closing and 0 or math.floor(26 * open)
+A.bodyL.Brightness = open * (0.8 + 0.5 * glow)
+addCF(A.body, rr.CFrame)
+end
+end
+
+local function updateSky(A, now, dt)
+local rr = A.root
+if not (rr and rr.Parent) then return end
+local want = CFG.fx and CFG.sky and not A.closing
+local N = want and (A.isSelf and CFG.skyGates or math.min(CFG.skyGates, 8)) or 0
+local aim = A.aim or (rr.Position + rr.CFrame.LookVector * 150)
+local flat = (aim - rr.Position) * Vector3.new(1, 0, 1)
+if flat.Magnitude < 2 then flat = rr.CFrame.LookVector * Vector3.new(1, 0, 1) end
+if flat.Magnitude < 0.01 then flat = Vector3.new(0, 0, -1) end
+flat = flat.Unit
+A.fwd = A.fwd and A.fwd:Lerp(flat, 1 - math.exp(-dt * 7)) or flat
+if A.fwd.Magnitude < 0.05 then A.fwd = flat end
+local frame = CFrame.lookAt(rr.Position, rr.Position + A.fwd.Unit)
+local list = A.sky
+local cols = math.max(2, math.ceil(math.max(N, 1) / 3))
+for i = #list + 1, N do
+local tier = (i - 1) % 3
+local col = math.ceil(i / 3)
+local f = ((col - 1) / (cols - 1)) * 2 - 1
+local phi = math.rad(80) * f + math.rad((math.random() - 0.5) * 8)
+local R = 15 + tier * 5 + math.random() * 2.5
+local P = newPortal(nil, 20, true)
+P.sizeMul = 1.5 + math.random() * 0.8
+P.born = now + 0.25 + (i - 1) * 0.07
+P.off = Vector3.new(math.sin(phi) * R, 3 + math.cos(phi) * R * 0.85, -2 + tier * 2.2 + math.random() * 3)
+P.sway = math.random() * 6.28
+P.jit = Vector3.new((math.random() - 0.5) * 8, (math.random() - 0.5) * 5, (math.random() - 0.5) * 8)
+list[i] = P
+end
+for i = #list, 1, -1 do
+local P = list[i]
+if i > N and not P.closing then P.closing = true P.closedAt = now end
+if P.closing and now - P.closedAt > 0.32 then
+destroyPortal(P)
+table.remove(list, i)
+else
+P.pos = frame * P.off + Vector3.new(0, math.sin(now * 1.2 + P.sway) * 0.5, 0)
+local d = aim + P.jit - P.pos
+P.dir = d.Magnitude > 8 and d.Unit or A.fwd.Unit
+updatePortal(P, now)
+end
+end
 end
 
 local remoteWatched = setmetatable({}, { __mode = "k" })
@@ -1927,6 +2155,7 @@ end
 return out
 end
 
+local ownerOf = setmetatable({}, { __mode = "k" })
 local lastFx = os.clock()
 local fallbackFor = 0
 local nextFallback = 0
@@ -1950,13 +2179,26 @@ lastBarrage = nowF
 end
 P.pulseAt = os.clock() + 0.05
 if P.emitter then P.emitter:Emit(6) end
-if CFG.swords then spawnSword(P) end
+if CFG.swords then
+spawnSword(P)
+local A = ownerOf[tool] and auras[ownerOf[tool]]
+local list = A and A.sky
+if list and #list > 0 and CFG.skyBarrage > 0 then
+for _ = 1, CFG.skyBarrage do
+local G = list[math.random(#list)]
+if G and not G.closing and G.scale > 0.9 then
+G.kick = 1
+spawnSword(G)
+end
+end
+end
+end
 if P.remote then playShot(P.core, 0.7) else playShot() end
 end
 
 local menuOpenNow = function() return getgenv().__BabylonMenuOpen == true end
 
-fxConnect(RunService.RenderStepped, function()
+local function fxFrame()
 local now = os.clock()
 local dt = math.min(now - lastFx, 0.1)
 lastFx = now
@@ -1980,7 +2222,7 @@ if wantMute ~= muted then applyMute(wantMute) end
 
 local want = {}
 local remoteOwners = {}
-for _, t in ipairs(tools) do want[t] = true end
+for _, t in ipairs(tools) do want[t] = true ownerOf[t] = lp end
 if CFG.fx and CFG.watchOthers then
 local shown = 0
 for _, pl in ipairs(Players:GetPlayers()) do
@@ -1994,7 +2236,7 @@ if isGun(t) then table.insert(guns, t) end
 end
 if #guns >= 2 then
 shown += 1
-remoteOwners[pl] = { root = rr, ch = ch }
+remoteOwners[pl] = { root = rr, ch = ch, aim = rr.Position + rr.CFrame.LookVector * 150 }
 local flat = rr.CFrame.LookVector * Vector3.new(1, 0, 1)
 if flat.Magnitude < 0.01 then flat = Vector3.new(0, 0, -1) end
 local frame = CFrame.lookAt(rr.Position, rr.Position + flat.Unit)
@@ -2002,6 +2244,7 @@ local offs = remoteOffsets(#guns)
 local look = rr.CFrame.LookVector
 for i, t in ipairs(guns) do
 want[t] = true
+ownerOf[t] = pl
 if not remoteWatched[t] then
 remoteWatched[t] = true
 hookAttrs(t)
@@ -2088,7 +2331,7 @@ end
 
 local owners = {}
 if CFG.fx and CFG.aura then
-if floating and root then owners[lp] = { root = root, ch = c, isSelf = true } end
+if floating and root then owners[lp] = { root = root, ch = c, isSelf = true, aim = target or (root.Position + root.CFrame.LookVector * 150) } end
 for pl, info in pairs(remoteOwners) do owners[pl] = info end
 end
 for owner, info in pairs(owners) do
@@ -2100,6 +2343,8 @@ auras[owner] = A
 onGateOpen(A)
 end
 A.root = info.root
+A.aim = info.aim
+A.ch = info.ch
 end
 for owner, A in pairs(auras) do
 if not owners[owner] and not A.closing then
@@ -2108,6 +2353,7 @@ A.closedAt = now
 onGateClose(A)
 end
 updateAura(A, now)
+updateSky(A, now, dt)
 if A.closing and now - A.closedAt > 0.8 then
 destroyAura(A)
 auras[owner] = nil
@@ -2132,19 +2378,35 @@ and now - lastShotAny > 0.45 and not UIS:GetFocusedTextBox() then
 nextFallback = now + 0.17
 dbg("fallback volley")
 for _, t in ipairs(tools) do
+if not hasAmmoAttr(t) then
 lastShot[t] = nil
 onShot(t, "fallback")
+end
 end
 lastShotAny = 0
 end
 
+do
+local filt = { folder() }
+if c then table.insert(filt, c) end
+for _, A in pairs(auras) do if A.ch then table.insert(filt, A.ch) end end
+rp.FilterDescendantsInstances = filt
+end
 updateSwords(dt, now)
 updatePulses(now)
+updateFlares(now)
 if #cfParts > 0 then
 pcall(function() workspace:BulkMoveTo(cfParts, cfValues, Enum.BulkMoveMode.FireCFrameChanged) end)
 end
 
 audioStep(dt, floating, nCenter > 0 and center / nCenter or (root and root.Position or nil))
+end
+fxConnect(RunService.RenderStepped, function()
+local ok, err = pcall(fxFrame)
+if not ok and os.clock() - (CFG._errAt or 0) > 5 then
+CFG._errAt = os.clock()
+warn("[GateFX] frame error: " .. tostring(err))
+end
 end)
 
 local function fxStop()
@@ -2210,6 +2472,8 @@ pose = true,         -- raise your arms in a hand-sign pose while you spray (oth
 detach = false,      -- EXPERIMENT, KEEP OFF: placing the bottles directly made the server delete them after about 2.4 seconds
 chat = false,        -- also say "Kai." / "FUGA." in the game chat when you spray. Off by default: the shared show works from the Molotov rockets themselves, so chat is not needed
 watch = true,        -- show the Fuga effects around other players who run this script when their chat lines arrive
+watchRange = 300,    -- how far away (studs) another player's Fuga show is drawn
+previewTime = 1.8,   -- seconds the "preview" test holds the show before it releases
 safeDistance = 25,   -- studs: a throw is held back if your cursor is pointing closer than this to you (it would burn you)
 voiceId = "",        -- optional: your own Roblox audio id (for example "rbxassetid://123456") played when the ring fires
 faceOffset = CFrame.Angles(math.rad(-90), 0, 0), -- how a bottle sits relative to its look direction
@@ -2295,7 +2559,7 @@ local function markAim(tool)
 pcall(function() aimAt[tool] = mouse.Hit.Position end)
 end
 
-local FIRE_TEX = "rbxasset://textures/particles/fire_main.dmg"
+local FIRE_TEX = "rbxasset://textures/particles/fire_main.dds"
 local toolFx = setmetatable({}, { __mode = "k" })
 local base = nil -- invisible anchored part at your feet: ember disc + light
 local arrow = nil
@@ -2429,8 +2693,7 @@ task.delay(1.5, function() if ring.Parent then ring:Destroy() end end)
 end)
 end
 
-local function buildArrow()
-if arrow and arrow.part.Parent then return arrow end
+local function createArrowObj(parent)
 local ok, made = pcall(function()
 local part = Instance.new("Part")
 part.Name = "FugaArrow"
@@ -2490,20 +2753,52 @@ fire.Color = ColorSequence.new(hot, red)
 fire.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
 fire.Parent = aT
 a.fire = fire
-part.Parent = workspace
+part.Parent = parent or workspace
 return a
 end)
-if ok then arrow = made end
+return ok and made or nil
+end
+
+local function buildArrow()
+if arrow and arrow.part.Parent then return arrow end
+arrow = createArrowObj(workspace) or arrow
 return arrow
 end
 
-local function arrowVisible(v)
-if not arrow then return end
+local function arrowVisibleObj(a, v)
+if not a then return end
 pcall(function()
-arrow.glow.Enabled = v arrow.shaft.Enabled = v arrow.headGlow.Enabled = v arrow.head.Enabled = v
-arrow.stringL.Enabled = v arrow.stringR.Enabled = v
-for _, b in ipairs(arrow.bowBeams) do b.Enabled = v end
-if not v then arrow.fire.Rate = 0 end
+a.glow.Enabled = v a.shaft.Enabled = v a.headGlow.Enabled = v a.head.Enabled = v
+a.stringL.Enabled = v a.stringR.Enabled = v
+for _, b in ipairs(a.bowBeams) do b.Enabled = v end
+if not v then a.fire.Rate = 0 end
+end)
+end
+local function arrowVisible(v) arrowVisibleObj(arrow, v) end
+
+local function poseArrow(a, center, dir, scale, wm, drawBack)
+local m = (0.3 + 0.7 * scale) * wm
+pcall(function()
+a.part.CFrame = CFrame.lookAt(center, center + dir)
+local draw = drawBack and math.max(0, 1 - scale) * 3 or 0
+a.aT.Position = Vector3.new(0, 0, 2.5 * scale + draw)
+a.aS.Position = Vector3.new(0, 0, -12 * scale)
+a.aP.Position = Vector3.new(0, 0, -17 * scale)
+a.shaft.Width0, a.shaft.Width1 = 1 * m, 1 * m
+a.glow.Width0, a.glow.Width1 = 2.8 * m, 2.8 * m
+a.head.Width0, a.head.Width1 = 4.2 * m, 0
+a.headGlow.Width0, a.headGlow.Width1 = 7 * m, 0
+for i = 1, 7 do
+local k = (i - 4) / 3
+a.bow[i].Position = Vector3.new(k * 7 * scale, 0, (-8 + 6.5 * k * k) * scale)
+end
+local bw = 0.8 * m
+for i, b in ipairs(a.bowBeams) do
+b.Width0, b.Width1 = bw * (i % 2 == 1 and 1 or 2.6), bw * (i % 2 == 1 and 1 or 2.6)
+end
+a.stringL.Width0, a.stringL.Width1 = 0.3 * m, 0.3 * m
+a.stringR.Width0, a.stringR.Width1 = 0.3 * m, 0.3 * m
+a.fire.Rate = math.min(60 * scale, 150) * wm
 end)
 end
 
@@ -2538,29 +2833,7 @@ scale = 1
 wm = 1 - t
 end
 arrowVisible(true)
-local m = (0.3 + 0.7 * scale) * wm
-pcall(function()
-a.part.CFrame = CFrame.lookAt(center, center + dir)
-local draw = arrowState == "charge" and (1 - scale) * 3 or 0 -- the string is drawn back while it forms
-a.aT.Position = Vector3.new(0, 0, 2.5 * scale + draw)
-a.aS.Position = Vector3.new(0, 0, -12 * scale)
-a.aP.Position = Vector3.new(0, 0, -17 * scale)
-a.shaft.Width0, a.shaft.Width1 = 1 * m, 1 * m
-a.glow.Width0, a.glow.Width1 = 2.8 * m, 2.8 * m
-a.head.Width0, a.head.Width1 = 4.2 * m, 0
-a.headGlow.Width0, a.headGlow.Width1 = 7 * m, 0
-for i = 1, 7 do
-local k = (i - 4) / 3
-a.bow[i].Position = Vector3.new(k * 7 * scale, 0, (-8 + 6.5 * k * k) * scale)
-end
-local bw = 0.8 * m
-for i, b in ipairs(a.bowBeams) do
-b.Width0, b.Width1 = bw * (i % 2 == 1 and 1 or 2.6), bw * (i % 2 == 1 and 1 or 2.6)
-end
-a.stringL.Width0, a.stringL.Width1 = 0.3 * m, 0.3 * m
-a.stringR.Width0, a.stringR.Width1 = 0.3 * m, 0.3 * m
-a.fire.Rate = 60 * scale * wm
-end)
+poseArrow(a, center, dir, scale, wm, arrowState == "charge")
 end
 
 local SoundService = game:GetService("SoundService")
@@ -2581,7 +2854,7 @@ local S_BASS, S_BOOM, S_WHOOSH = "rbxasset://sounds/bass.wav", "rbxasset://sound
 local S_LAUNCH, S_SLASH, S_THUNDER = "rbxasset://sounds/Launching rocket.wav", "rbxasset://sounds/swordslash.wav", "rbxasset://sounds/HalloweenThunder.wav"
 
 local impacting = false
-local function playImpact()
+local function playImpact(word)
 if not CFG.impact or impacting then return end
 impacting = true
 task.spawn(function()
@@ -2622,7 +2895,7 @@ txt.AnchorPoint = Vector2.new(0.5, 0.5)
 txt.Position = UDim2.fromScale(0.5, 0.5)
 txt.Size = UDim2.fromScale(0.9, 0.34)
 txt.BackgroundTransparency = 1
-txt.Text = "FUGA"
+txt.Text = word or "FUGA"
 txt.Font = Enum.Font.GothamBlack
 txt.TextScaled = true
 txt.TextColor3 = Color3.fromRGB(235, 20, 20)
@@ -2741,14 +3014,14 @@ end)
 end
 
 local Lighting = game:GetService("Lighting")
-local skyOrig, bloomFx, skyUsers = nil, nil, 0
+local skyOrig, bloomFx, skyUsers, skyFx = nil, nil, 0, {}
 local shakeUntil, shakeMag = 0, 0
 local selfShow = nil
 local remoteShows = {}
 local RED, WHITE = Color3.fromRGB(255, 40, 20), Color3.fromRGB(255, 235, 215)
 
 local function newPart(folder, size, color, material, shape)
-local p = Instance.new("Part")
+local p = (shape == "Wedge") and Instance.new("WedgePart") or Instance.new("Part")
 p.Anchored = true
 p.CanCollide = false
 p.CanQuery = false
@@ -2757,7 +3030,7 @@ p.CastShadow = false
 p.Size = size
 p.Color = color
 p.Material = material or Enum.Material.Neon
-if shape then p.Shape = shape end
+if shape and shape ~= "Wedge" then p.Shape = shape end
 p.Parent = folder
 return p
 end
@@ -2800,6 +3073,40 @@ bloomFx.Threshold = 1.0
 bloomFx.Parent = Lighting
 TweenService:Create(bloomFx, TweenInfo.new(0.5), { Intensity = 0.7 }):Play()
 end)
+pcall(function()
+local at = Lighting:FindFirstChildOfClass("Atmosphere")
+if at then
+skyFx.atmo = { inst = at, goal = { Color = at.Color, Decay = at.Decay, Density = at.Density, Offset = at.Offset, Glare = at.Glare, Haze = at.Haze } }
+else
+at = Instance.new("Atmosphere")
+at.Name = "FugaAtmo"
+at.Density = 0
+at.Parent = Lighting
+skyFx.atmo = { inst = at, made = true }
+end
+skyFx.atmoTw = TweenService:Create(at, TweenInfo.new(1.0, Enum.EasingStyle.Quad), {
+Color = Color3.fromRGB(150, 20, 16), Decay = Color3.fromRGB(70, 6, 4), Density = 0.4, Offset = 0.15, Glare = 0.3, Haze = 2.2,
+})
+skyFx.atmoTw:Play()
+end)
+pcall(function()
+local terrain = workspace:FindFirstChildOfClass("Terrain")
+if not terrain then return end
+local cl = terrain:FindFirstChildOfClass("Clouds")
+if cl then
+skyFx.cloud = { inst = cl, goal = { Color = cl.Color, Cover = cl.Cover, Density = cl.Density, Enabled = cl.Enabled } }
+cl.Enabled = true
+else
+cl = Instance.new("Clouds")
+cl.Name = "FugaClouds"
+cl.Cover = 0
+cl.Density = 0
+cl.Parent = terrain
+skyFx.cloud = { inst = cl, made = true }
+end
+skyFx.cloudTw = TweenService:Create(cl, TweenInfo.new(1.2, Enum.EasingStyle.Quad), { Color = Color3.fromRGB(150, 22, 18), Cover = 0.85, Density = 0.9 })
+skyFx.cloudTw:Play()
+end)
 end
 local function skyOff(instant)
 skyUsers = math.max(0, skyUsers - 1)
@@ -2807,6 +3114,29 @@ if skyUsers > 0 and not instant then return end
 if instant then skyUsers = 0 end
 local o = skyOrig
 skyOrig = nil
+for _, key in ipairs({ "atmo", "cloud" }) do
+local af = skyFx[key]
+skyFx[key] = nil
+local tw = skyFx[key .. "Tw"]
+skyFx[key .. "Tw"] = nil
+if tw then pcall(function() tw:Cancel() end) end
+if af and af.inst then
+local inst = af.inst
+if af.made then
+if instant then pcall(function() inst:Destroy() end)
+else
+pcall(function() TweenService:Create(inst, TweenInfo.new(0.9), key == "atmo" and { Density = 0 } or { Cover = 0, Density = 0 }):Play() end)
+task.delay(1, function() pcall(function() inst:Destroy() end) end)
+end
+elseif inst.Parent then
+if instant then
+for k, v in pairs(af.goal) do pcall(function() inst[k] = v end) end
+else
+pcall(function() TweenService:Create(inst, TweenInfo.new(0.9), af.goal):Play() end)
+end
+end
+end
+end
 if bloomFx then
 local b = bloomFx
 bloomFx = nil
@@ -2970,6 +3300,34 @@ sp.Parent = workspace
 local e = fireEmitter(sp, 0, NumberRange.new(1, 2.2), NumberRange.new(40, 120), 9, Vector2.new(180, 180))
 e:Emit(260)
 Debris:AddItem(sp, 3)
+local function solid(shape, color, size, cf, t0)
+local q = Instance.new("Part")
+q.Shape = shape
+q.Anchored, q.CanCollide, q.CanQuery, q.CanTouch, q.CastShadow = true, false, false, false, false
+q.Material = Enum.Material.Neon
+q.Color = color
+q.Transparency = t0
+q.Size = size
+q.CFrame = cf
+q.Parent = workspace
+return q
+end
+local function grow(q, dur, props)
+TweenService:Create(q, TweenInfo.new(dur, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props):Play()
+Debris:AddItem(q, dur + 0.2)
+end
+local up = CFrame.Angles(0, 0, math.pi / 2)
+local cyl = Enum.PartType.Cylinder
+local stem = solid(cyl, Color3.fromRGB(255, 105, 25), Vector3.new(10, 12, 12), CFrame.new(pos + Vector3.new(0, 5, 0)) * up, 0.1)
+grow(stem, 1.9, { Size = Vector3.new(86, 26, 26), CFrame = CFrame.new(pos + Vector3.new(0, 43, 0)) * up, Transparency = 1 })
+local cap = solid(Enum.PartType.Ball, Color3.fromRGB(255, 70, 15), Vector3.new(14, 10, 14), CFrame.new(pos + Vector3.new(0, 12, 0)), 0.15)
+grow(cap, 2.2, { Size = Vector3.new(130, 64, 130), CFrame = CFrame.new(pos + Vector3.new(0, 92, 0)), Transparency = 1 })
+local capHot = solid(Enum.PartType.Ball, Color3.fromRGB(255, 205, 130), Vector3.new(10, 8, 10), CFrame.new(pos + Vector3.new(0, 12, 0)), 0)
+grow(capHot, 1.4, { Size = Vector3.new(76, 42, 76), CFrame = CFrame.new(pos + Vector3.new(0, 86, 0)), Transparency = 1 })
+local flat = CFrame.new(pos + Vector3.new(0, 0.6, 0)) * up
+grow(solid(cyl, Color3.fromRGB(255, 235, 215), Vector3.new(0.8, 10, 10), flat, 0.1), 1.1, { Size = Vector3.new(0.8, 360, 360), Transparency = 1 })
+grow(solid(cyl, Color3.fromRGB(230, 30, 15), Vector3.new(0.8, 20, 20), flat, 0.25), 1.9, { Size = Vector3.new(0.8, 230, 230), Transparency = 1 })
+grow(solid(cyl, Color3.fromRGB(255, 245, 230), Vector3.new(420, 7, 7), CFrame.new(pos + Vector3.new(0, 210, 0)) * up, 0.05), 0.75, { Size = Vector3.new(420, 0.6, 0.6), Transparency = 1 })
 local me = char() and char():FindFirstChild("HumanoidRootPart")
 if me and (me.Position - pos).Magnitude < 400 then shake(1.2, 0.5) end
 playSound(S_BOOM, 1, 0.6)
@@ -2981,8 +3339,43 @@ local function newShow(opts)
 local S = { on = false, folder = nil, gui = nil, conns = {}, usesSky = false }
 local sigil, shrine, bottles = {}, {}, {}
 local center, frameCF, t0 = Vector3.zero, CFrame.new(), 0
-local lance, lanceGlow, lanceBits = nil, nil, {}
 local launchT, launchFrom, launchDir = nil, nil, nil
+local slashes = {}
+S.lastSlash, S.lastCleave, S.lastRipple = 0, 0, 0
+
+local function spawnSlash(origin, big)
+local a = math.random() * math.pi * 2
+local d = big and (22 + math.random() * 55) or (8 + math.random() * 55)
+local h = big and (6 + math.random() * 28) or (1 + math.random() * 28)
+local pos = origin + Vector3.new(math.cos(a) * d, h - 3, math.sin(a) * d)
+local len = big and (90 + math.random() * 60) or (14 + math.random() * 34)
+local roll = (math.random() - 0.5) * 2.4
+local dir = CFrame.Angles(0, math.random() * math.pi, 0):VectorToWorldSpace(Vector3.new(math.cos(roll), math.sin(roll), 0))
+local w = big and 0.9 or 0.3
+local core = newPart(S.folder, Vector3.new(w, w, len), WHITE)
+local glow = newPart(S.folder, Vector3.new(w * 5, w * 5, len), RED)
+glow.Transparency = 0.5
+local cf = CFrame.lookAt(pos, pos + dir)
+core.CFrame, glow.CFrame = cf, cf
+table.insert(slashes, { core = core, glow = glow, born = os.clock(), life = big and 0.32 or 0.18, w = w, len = len })
+end
+local function updateSlashes(now)
+for i = #slashes, 1, -1 do
+local q = slashes[i]
+local a = (now - q.born) / q.life
+if a >= 1 then
+pcall(function() q.core:Destroy() q.glow:Destroy() end)
+table.remove(slashes, i)
+else
+local k = 1 - a
+local l = q.len * (0.45 + 0.55 * math.min(1, a * 9))
+q.core.Size = Vector3.new(q.w * k, q.w * k, l)
+q.glow.Size = Vector3.new(q.w * 5 * k, q.w * 5 * k, l)
+q.core.Transparency = a * a
+q.glow.Transparency = 0.5 + 0.5 * a
+end
+end
+end
 
 local function polygon(sides, radius, rot, color, dir, thick)
 for i = 1, sides do
@@ -3012,43 +3405,300 @@ table.insert(sigil, { part = p, off = CFrame.lookAt(d * 13.7 + Vector3.new(0, 0.
 end
 end
 
-local function buildShrine(pos, towards)
-local K = 0.8
-local dark = Color3.fromRGB(24, 12, 12)
+local function buildShrine(pos, towards, K)
+K = K or 0.8
 frameCF = CFrame.lookAt(pos, towards)
-local function add(size, off, color, material, shape, fire)
-local p = newPart(S.folder, size * K, color, material, shape)
-table.insert(shrine, { part = p, off = CFrame.new(off.Position * K) * (off - off.Position), fire = fire })
-if fire then fireEmitter(p, 18, NumberRange.new(0.8, 1.6), NumberRange.new(6, 12), 7, Vector2.new(20, 20)) p.Transparency = 1 end
+S.shrineK = K
+S.lift = 70 * K / 0.8
+local SM, SL, NEON = Enum.Material.SmoothPlastic, Enum.Material.Slate, Enum.Material.Neon
+local BALL, CYL = Enum.PartType.Ball, Enum.PartType.Cylinder
+local stone = Color3.fromRGB(34, 17, 19)
+local stone2 = Color3.fromRGB(54, 25, 27)
+local crim = Color3.fromRGB(122, 12, 18)
+local crimDk = Color3.fromRGB(72, 8, 13)
+local roofC = Color3.fromRGB(88, 16, 22)
+local gold = Color3.fromRGB(172, 122, 28)
+local hornC = Color3.fromRGB(30, 9, 11)
+local toothC = Color3.fromRGB(240, 226, 218)
+local gumC = Color3.fromRGB(170, 40, 54)
+local lampC = Color3.fromRGB(80, 132, 228)
+local boneC, boneDk = Color3.fromRGB(172, 158, 130), Color3.fromRGB(128, 114, 94)
+local void = Color3.fromRGB(8, 2, 2)
+local rng = Random.new(77)
+S.model = Instance.new("Model")
+S.model.Name = "Shrine"
+S.model.Parent = S.folder
+
+local function add(size, off, color, material, shape, fire, ft)
+local p = newPart(S.model, size * K, color, material, shape)
+local o = CFrame.new(off.Position * K) * (off - off.Position)
+p.CFrame = frameCF * o
+table.insert(shrine, { part = p, off = o, fire = fire, ft = ft })
+if fire then
+fireEmitter(p, 18, NumberRange.new(0.8, 1.6), NumberRange.new(6, 12), 7, Vector2.new(20, 20))
+p.Transparency = 1
+end
 return p
 end
-local cyl = Enum.PartType.Cylinder
-for _, sx in ipairs({ -20, 20 }) do
-add(Vector3.new(36, 4.2, 4.2), CFrame.new(sx, 18, 0) * CFrame.Angles(0, 0, math.pi / 2), dark, Enum.Material.Slate, cyl)
-for _, yy in ipairs({ 3, 11, 19 }) do
-add(Vector3.new(0.7, 4.9, 4.9), CFrame.new(sx, yy, 0) * CFrame.Angles(0, 0, math.pi / 2), RED, Enum.Material.Neon, cyl)
+local function light(part, color, range, brightness)
+local l = Instance.new("PointLight")
+l.Color, l.Range, l.Brightness = color, range, brightness
+l.Parent = part
+return l
+end
+local function bar(x1, y1, x2, y2, th, depth, zc, color, mat, ft)
+local len = math.sqrt((x2 - x1) ^ 2 + (y2 - y1) ^ 2) + 0.5
+return add(Vector3.new(len, th, depth), CFrame.new((x1 + x2) / 2, (y1 + y2) / 2, zc) * CFrame.Angles(0, 0, math.atan2(y2 - y1, x2 - x1)), color, mat or SL, nil, nil, ft)
+end
+local function hornAt(p0, dir, len, th, bend, n, color)
+local p, seg = p0, len / n
+for i = 1, n do
+local d = (dir + bend * ((i - 1) / n)).Unit
+local q = p + d * seg
+local t = th * (1 - 0.72 * (i - 1) / n)
+add(Vector3.new(seg + 0.7, t, t), CFrame.lookAt((p + q) / 2, q) * CFrame.Angles(0, math.pi / 2, 0), color or hornC, SM, CYL)
+p = q
 end
 end
-add(Vector3.new(56, 2, 2.4), CFrame.new(0, 24, 0), dark, Enum.Material.Slate)
-add(Vector3.new(56, 0.35, 2.7), CFrame.new(0, 25.1, 0), RED)
-add(Vector3.new(66, 3, 3.2), CFrame.new(0, 31, 0), dark, Enum.Material.Slate)
-add(Vector3.new(66, 0.4, 3.5), CFrame.new(0, 32.7, 0), RED)
-add(Vector3.new(86, 3, 10), CFrame.new(0, 35, 0), dark, Enum.Material.Slate)
-add(Vector3.new(86, 0.45, 10.4), CFrame.new(0, 33.4, 0), RED)
-add(Vector3.new(15, 3, 10), CFrame.new(-44, 36.8, 0) * CFrame.Angles(0, 0, math.rad(20)), dark, Enum.Material.Slate)
-add(Vector3.new(15, 3, 10), CFrame.new(44, 36.8, 0) * CFrame.Angles(0, 0, math.rad(-20)), dark, Enum.Material.Slate)
-add(Vector3.new(60, 3, 7), CFrame.new(0, 38.6, 0), dark, Enum.Material.Slate)
-add(Vector3.new(60, 0.4, 7.4), CFrame.new(0, 40.2, 0), RED)
-local eye = add(Vector3.new(6, 6, 6), CFrame.new(0, 28, 0), RED, Enum.Material.Neon, Enum.PartType.Ball)
-local light = Instance.new("PointLight")
-light.Color = Color3.fromRGB(255, 60, 30)
-light.Range = 70
-light.Brightness = 4
-light.Parent = eye
-add(Vector3.new(1.4, 6, 6.2), CFrame.new(0, 28, 0), WHITE, Enum.Material.Neon, Enum.PartType.Ball)
-for _, fx in ipairs({ -36, -18, 0, 18, 36 }) do
-add(Vector3.new(1, 1, 1), CFrame.new(fx, 41, 0), RED, Enum.Material.Neon, nil, true)
+
+add(Vector3.new(136, 7, 100), CFrame.new(0, -4.5, -14), stone, SL)
+local water = add(Vector3.new(130, 1, 94), CFrame.new(0, -0.5, -14), Color3.fromRGB(7, 5, 11), SM)
+water.Reflectance = 0.45
+add(Vector3.new(108, 10, 70), CFrame.new(0, -13, -12), stone2, SL)
+add(Vector3.new(108.4, 0.5, 70.4), CFrame.new(0, -17.8, -12), RED, NEON)
+add(Vector3.new(76, 12, 50), CFrame.new(0, -24, -12), stone, SL)
+add(Vector3.new(76.4, 0.5, 50.4), CFrame.new(0, -29.8, -12), RED, NEON)
+add(Vector3.new(42, 14, 30), CFrame.new(0, -37, -12), stone2, SL)
+for _, c in ipairs({ { 0, -52, 0, 7, 22 }, { -9, -49, 4, 5, 14 }, { 9, -48, -4, 5.5, 16 } }) do
+add(Vector3.new(c[4], c[5], c[4]), CFrame.new(c[1], c[2], -12 + c[3]), Color3.fromRGB(200, 24, 28), NEON, BALL)
 end
+local underLight = add(Vector3.new(1, 1, 1), CFrame.new(0, -46, -12), RED, NEON, nil, nil, 1)
+light(underLight, Color3.fromRGB(255, 50, 30), 70, 2)
+local mist = add(Vector3.new(50, 1, 36), CFrame.new(0, -26, -12), crim, SM, nil, nil, 1)
+do
+local m = Instance.new("ParticleEmitter")
+m.Texture = "rbxasset://textures/particles/smoke_main.dds"
+m.Rate = 10
+m.Lifetime = NumberRange.new(4, 6)
+m.Speed = NumberRange.new(2, 5)
+m.EmissionDirection = Enum.NormalId.Bottom
+m.Shape = Enum.ParticleEmitterShape.Box
+m.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 14), NumberSequenceKeypoint.new(1, 30) })
+m.Color = ColorSequence.new(Color3.fromRGB(120, 14, 12))
+m.LightEmission = 0.25
+m.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.55), NumberSequenceKeypoint.new(1, 1) })
+m.Parent = mist
+end
+add(Vector3.new(0.1, 46, 30), CFrame.new(0, 0.12, -50) * CFrame.Angles(0, 0, math.pi / 2), Color3.fromRGB(190, 20, 20), NEON, CYL, nil, 0.72)
+
+add(Vector3.new(96, 3, 64), CFrame.new(0, 1.5, 0), stone2, SL)
+add(Vector3.new(88, 3, 56), CFrame.new(0, 4.5, 0), stone, SL)
+add(Vector3.new(34, 3, 7), CFrame.new(0, 1.5, -35.5), stone2, SL)
+add(Vector3.new(32, 3, 5), CFrame.new(0, 4.5, -30.5), stone2, SL)
+add(Vector3.new(88.4, 0.3, 0.6), CFrame.new(0, 6.1, -28.2), gold, NEON)
+
+local wallC = Color3.fromRGB(106, 11, 17)
+add(Vector3.new(91, 28, 3), CFrame.new(0, 20, 20), crimDk, SM)
+add(Vector3.new(3, 28, 34), CFrame.new(-44, 20, 4), crimDk, SM)
+add(Vector3.new(3, 28, 34), CFrame.new(44, 20, 4), crimDk, SM)
+add(Vector3.new(22, 28, 3), CFrame.new(-33, 20, -12), wallC, SM)
+add(Vector3.new(22, 28, 3), CFrame.new(33, 20, -12), wallC, SM)
+add(Vector3.new(44, 7, 3), CFrame.new(0, 30.5, -12), wallC, SM)
+add(Vector3.new(88.6, 0.8, 3.6), CFrame.new(0, 34.2, -12), gold, NEON)
+for _, sx in ipairs({ -1, 1 }) do
+for _, bx in ipairs({ 26, 33, 40 }) do
+add(Vector3.new(1.1, 28, 0.7), CFrame.new(sx * bx, 20, -13.7), crimDk, SM)
+end
+add(Vector3.new(22, 1.1, 0.7), CFrame.new(sx * 33, 15, -13.7), crimDk, SM)
+add(Vector3.new(22, 1.1, 0.7), CFrame.new(sx * 33, 26, -13.7), crimDk, SM)
+end
+local throat = add(Vector3.new(62, 28, 1), CFrame.new(0, 20, 6), Color3.fromRGB(176, 10, 14), NEON)
+add(Vector3.new(1.5, 21, 18), CFrame.new(-21.2, 16.5, -3), Color3.fromRGB(120, 6, 10), NEON)
+add(Vector3.new(1.5, 21, 18), CFrame.new(21.2, 16.5, -3), Color3.fromRGB(120, 6, 10), NEON)
+add(Vector3.new(44, 1.5, 18), CFrame.new(0, 26.3, -3), Color3.fromRGB(120, 6, 10), NEON)
+add(Vector3.new(30, 14, 1), CFrame.new(0, 16, 5.2), Color3.fromRGB(255, 70, 26), NEON, BALL, nil, 0.3)
+add(Vector3.new(34, 5, 22), CFrame.new(0, 7.8, -4), Color3.fromRGB(184, 44, 60), SM, CYL)
+S.glow = light(throat, Color3.fromRGB(255, 50, 30), 95, 3)
+S.glow.Parent = add(Vector3.new(1, 1, 1), CFrame.new(0, 16, -2), RED, NEON, nil, nil, 1)
+add(Vector3.new(1, 1, 1), CFrame.new(0, 9, -6), RED, NEON, nil, true)
+add(Vector3.new(1, 1, 1), CFrame.new(-12, 9, -5), RED, NEON, nil, true)
+add(Vector3.new(1, 1, 1), CFrame.new(12, 9, -5), RED, NEON, nil, true)
+add(Vector3.new(46.5, 2.2, 4.2), CFrame.new(0, 27.6, -11.5), gumC, SM)
+add(Vector3.new(46.5, 2.4, 4.2), CFrame.new(0, 7.2, -11.5), gumC, SM)
+local function tooth(cx, yBase, h, w, down)
+local d = w / 2
+local cy = down and (yBase - h / 2) or (yBase + h / 2)
+local flip = down and CFrame.Angles(0, 0, math.pi) or CFrame.new()
+add(Vector3.new(3.2, h, d), CFrame.new(cx - d / 2, cy, -11.2) * CFrame.Angles(0, math.pi / 2, 0) * flip, toothC, SM, "Wedge")
+add(Vector3.new(3.2, h, d), CFrame.new(cx + d / 2, cy, -11.2) * CFrame.Angles(0, -math.pi / 2, 0) * flip, toothC, SM, "Wedge")
+end
+local upH = { 7, 9, 14, 9, 8, 11, 8, 9, 14, 9, 7 }
+for i = 0, 10 do tooth((i - 5) * 3.95, 27.2, upH[i + 1], 3.8, true) end
+local loH = { 6, 8, 12, 8, 7, 7, 8, 12, 8, 6 }
+for i = 0, 9 do tooth((i - 4.5) * 3.95, 6.8, loH[i + 1], 3.8, false) end
+
+for _, sx in ipairs({ -1, 1 }) do
+add(Vector3.new(28, 5, 5), CFrame.new(sx * 26.5, 20, -16) * CFrame.Angles(0, 0, math.pi / 2), crim, SM, CYL)
+for _, yy in ipairs({ 7.5, 20, 32.5 }) do
+add(Vector3.new(0.9, 5.7, 5.7), CFrame.new(sx * 26.5, yy, -16) * CFrame.Angles(0, 0, math.pi / 2), gold, NEON, CYL)
+end
+add(Vector3.new(8, 1.6, 8), CFrame.new(sx * 26.5, 6.8, -16), stone2, SL)
+add(Vector3.new(7, 1.6, 7), CFrame.new(sx * 26.5, 34.6, -16), stone2, SL)
+add(Vector3.new(31, 4.6, 4.6), CFrame.new(sx * 40, 21.5, -26) * CFrame.Angles(0, 0, math.pi / 2), crim, SM, CYL)
+for _, yy in ipairs({ 8, 22, 35.4 }) do
+add(Vector3.new(0.9, 5.3, 5.3), CFrame.new(sx * 40, yy, -26) * CFrame.Angles(0, 0, math.pi / 2), gold, NEON, CYL)
+end
+end
+add(Vector3.new(84, 2.4, 2.6), CFrame.new(0, 33, -26), crim, SM)
+add(Vector3.new(84, 0.4, 2.9), CFrame.new(0, 31.6, -26), gold, NEON)
+
+local function roof(halfW, yEave, yApex, tip, zc, depth, thick, N, strips)
+local function py(u) return yEave + (yApex - yEave) * u ^ 1.7 end
+local front = zc - depth / 2
+for _, s in ipairs({ -1, 1 }) do
+local tx, ty = s * (halfW + tip), yEave + tip * 0.75
+bar(tx, ty, s * halfW, yEave, thick, depth, zc, roofC)
+bar(tx, ty, s * halfW, yEave, thick + 0.9, 1.0, front - 0.2, gold, NEON)
+for i = 0, N - 1 do
+local u1, u2 = i / N, (i + 1) / N
+local x1, x2 = s * halfW * (1 - u1), s * halfW * (1 - u2)
+bar(x1, py(u1), x2, py(u2), thick, depth, zc, roofC)
+bar(x1, py(u1), x2, py(u2), thick + 0.9, 1.0, front - 0.2, gold, NEON)
+end
+for _, u in ipairs({ 0.25, 0.5, 0.75 }) do
+add(Vector3.new(0.9, 0.9, depth + 0.6), CFrame.new(s * halfW * (1 - u), py(u) + thick / 2 + 0.3, zc), Color3.fromRGB(170, 24, 28), SM)
+end
+end
+add(Vector3.new(3.4, 3, depth + 3), CFrame.new(0, yApex + 0.4, zc), roofC, SL)
+add(Vector3.new(1.1, 1.1, depth + 3), CFrame.new(0, yApex + 2.2, zc), gold, NEON)
+local top = yApex - thick * 0.6
+local h = (top - yEave) / strips
+for k = 1, strips do
+local y1 = yEave + k * h
+local u = ((y1 + thick * 0.6 - yEave) / (yApex - yEave)) ^ (1 / 1.7)
+local w = halfW * (1 - math.min(1, u))
+if w > 1 then
+add(Vector3.new(w * 2, h + 0.1, 1.6), CFrame.new(0, y1 - h / 2, front + 0.9), crimDk, SM)
+end
+end
+return front
+end
+
+local front1 = roof(50, 36, 56, 7, -4, 60, 3, 7, 6)
+add(Vector3.new(1, 12, 12), CFrame.new(0, 44.5, front1 - 0.4) * CFrame.Angles(0, math.pi / 2, 0), RED, NEON, CYL)
+add(Vector3.new(1.2, 8, 8), CFrame.new(0, 44.5, front1 - 0.9) * CFrame.Angles(0, math.pi / 2, 0), hornC, SM, CYL)
+add(Vector3.new(1.4, 3.6, 3.6), CFrame.new(0, 44.5, front1 - 1.4) * CFrame.Angles(0, math.pi / 2, 0), RED, NEON, CYL)
+add(Vector3.new(62, 22, 28), CFrame.new(0, 55, -2), crim, SM)
+add(Vector3.new(63, 0.8, 29), CFrame.new(0, 66.2, -2), gold, NEON)
+local front2 = roof(44, 66, 88, 6, -2, 40, 2.8, 6, 6)
+add(Vector3.new(17, 4.8, 1), CFrame.new(0, 70, front2 - 0.3), Color3.fromRGB(255, 56, 28), NEON)
+add(Vector3.new(19, 0.6, 1.3), CFrame.new(0, 72.7, front2 - 0.4), gold, NEON)
+add(Vector3.new(19, 0.6, 1.3), CFrame.new(0, 67.3, front2 - 0.4), gold, NEON)
+for i = 0, 6 do
+add(Vector3.new(1.9, 3.2, 1.5), CFrame.new((i - 3) * 2.4, 71.2, front2 - 0.9), toothC, SM, BALL)
+end
+for i = 0, 5 do
+add(Vector3.new(1.9, 3, 1.5), CFrame.new((i - 2.5) * 2.4, 68.8, front2 - 0.9), toothC, SM, BALL)
+end
+
+local function rakeHorns(halfW, yEave, yApex, thick, front, us, len)
+for _, s in ipairs({ -1, 1 }) do
+for j, u in ipairs(us) do
+local x, y = s * halfW * (1 - u), yEave + (yApex - yEave) * u ^ 1.7 + thick / 2
+local slope = (yApex - yEave) * 1.7 * u ^ 0.7 / halfW
+local n = Vector3.new(s * slope, 1, 0).Unit
+local dir = (n + Vector3.new(0, 0, -0.35)).Unit
+hornAt(Vector3.new(x, y, front + 0.8), dir, len - j * 0.35, 2.1, Vector3.new(-s * 0.55, 1.1, -0.1), 2)
+end
+end
+end
+rakeHorns(50, 36, 56, 3, front1, { 0.1, 0.3, 0.5, 0.7, 0.9 }, 9)
+rakeHorns(44, 66, 88, 2.8, front2, { 0.14, 0.4, 0.66, 0.9 }, 8)
+for _, s in ipairs({ -1, 1 }) do
+hornAt(Vector3.new(s * 57, 41.5, front1 + 1), Vector3.new(s * 0.7, 0.8, -0.3).Unit, 17, 3.2, Vector3.new(-s * 0.25, 1.4, -0.1), 3)
+hornAt(Vector3.new(s * 50, 70.5, front2 + 1), Vector3.new(s * 0.7, 0.8, -0.3).Unit, 14, 2.8, Vector3.new(-s * 0.25, 1.4, -0.1), 3)
+end
+for i, z in ipairs({ -18, -9, 0, 9, 17 }) do
+local s = i % 2 == 0 and 1 or -1
+hornAt(Vector3.new(0, 90, z), Vector3.new(s * 0.3, 1, 0).Unit, 11 + (i == 3 and 5 or 0), 3, Vector3.new(-s * 0.9, 0.5, 0.15), 3)
+end
+for i, z in ipairs({ -30, -23, 18, 24 }) do
+local s = i % 2 == 0 and 1 or -1
+hornAt(Vector3.new(0, 58.5, z), Vector3.new(s * 0.3, 1, 0).Unit, 8, 2.4, Vector3.new(-s * 0.8, 0.5, 0.1), 3)
+end
+for _, s in ipairs({ -1, 1 }) do
+add(Vector3.new(1, 1, 1), CFrame.new(s * 64, 58, front1 - 3), RED, NEON, nil, true)
+add(Vector3.new(1, 1, 1), CFrame.new(s * 56, 84, front2 - 2), RED, NEON, nil, true)
+end
+
+for _, s in ipairs({ -1, 1 }) do
+local x, z = s * 28, -46
+add(Vector3.new(6, 1.2, 6), CFrame.new(x, 0.6, z), stone2, SL)
+add(Vector3.new(7, 2.6, 2.6), CFrame.new(x, 4.2, z) * CFrame.Angles(0, 0, math.pi / 2), stone2, SL, CYL)
+local lamp = add(Vector3.new(5, 5, 5), CFrame.new(x, 9.8, z), lampC, NEON, nil, nil, 0.1)
+light(lamp, Color3.fromRGB(150, 195, 255), 42, 1.5)
+add(Vector3.new(8, 1.4, 8), CFrame.new(x, 13, z), stone, SL)
+add(Vector3.new(5, 1.2, 5), CFrame.new(x, 14.3, z), stone, SL)
+add(Vector3.new(2.6, 2.6, 2.6), CFrame.new(x, 15.8, z), stone2, SL, BALL)
+for _, hx in ipairs({ 33, 46 }) do
+local top = 36 + 20 * (1 - hx / 50) ^ 1.7 - 1.8
+local ly = 29.5
+add(Vector3.new(0.35, top - ly - 2, 0.35), CFrame.new(s * hx, (top + ly + 2) / 2, -33) * CFrame.Angles(0, 0, math.pi / 2), hornC, SM, CYL)
+add(Vector3.new(4, 4.6, 4), CFrame.new(s * hx, ly, -33), lampC, NEON, BALL, nil, 0.1)
+add(Vector3.new(0.8, 2.6, 0.8), CFrame.new(s * hx, ly - 3.6, -33), gold, NEON)
+end
+end
+
+for _, s in ipairs({ -1, 1 }) do
+local base = Vector3.new(s * 57, 0, -6)
+local dir = Vector3.new(s * 0.16, 1, 0.06).Unit
+local p = base
+local pts = { base }
+for i = 1, 2 do
+local q = p + (dir + Vector3.new(s * 0.12 * i, 0, 0)).Unit * 14
+local t = i == 1 and 3.4 or 2.5
+add(Vector3.new(15, t, t), CFrame.lookAt((p + q) / 2, q) * CFrame.Angles(0, math.pi / 2, 0), Color3.fromRGB(24, 11, 11), SM, CYL)
+p = q
+table.insert(pts, q)
+end
+local v1 = pts[1] + Vector3.new(1.4, 0, 0)
+local v2 = pts[3] + Vector3.new(1.0, 0, 0)
+add(Vector3.new((v2 - v1).Magnitude, 0.4, 0.4), CFrame.lookAt((v1 + v2) / 2, v2) * CFrame.Angles(0, math.pi / 2, 0), RED, NEON, CYL)
+for b = 1, 6 do
+local from = pts[b <= 2 and 2 or 3]
+local a = rng:NextNumber(0, math.pi * 2)
+local d = Vector3.new(math.cos(a), rng:NextNumber(0.5, 1.2), math.sin(a)).Unit
+hornAt(from, d, rng:NextNumber(9, 14), 1.5, Vector3.new(0, 0.9, 0), 2, Color3.fromRGB(24, 11, 11))
+end
+end
+
+for i = 1, 8 do
+local side = i % 2 == 0 and 1 or -1
+local x = side * (rng:NextNumber(10, 46))
+local z = -rng:NextNumber(42, 58)
+local sc = rng:NextNumber(0.9, 1.6)
+local y = 1.8 * sc + (i > 5 and 3 or 0)
+local base = CFrame.new(x, y, z) * CFrame.Angles(0, rng:NextNumber(-0.9, 0.9), 0)
+add(Vector3.new(6.4, 5.4, 7) * sc, base, boneC, SM, BALL)
+add(Vector3.new(3.6, 3, 4.4) * sc, base * CFrame.new(0, -0.8 * sc, -3.6 * sc), boneDk, SM, BALL)
+for _, e in ipairs({ -1, 1 }) do
+add(Vector3.new(1.7, 1.8, 1.6) * sc, base * CFrame.new(e * 1.7 * sc, 0.6 * sc, -2.8 * sc), void, SM, BALL)
+local p0 = base:PointToWorldSpace(Vector3.new(e * 2.8 * sc, 1.2 * sc, 0))
+local dir = base:VectorToWorldSpace(Vector3.new(e, 0.25, -0.1)).Unit
+local bend = base:VectorToWorldSpace(Vector3.new(-e * 0.9, 1.6, -0.5))
+hornAt(p0, dir, 9 * sc, 2.3 * sc, bend, 3, boneDk)
+end
+end
+for i = 1, 12 do
+local x, z = rng:NextNumber(-48, 48), -rng:NextNumber(38, 60)
+add(Vector3.new(rng:NextNumber(8, 13), 1.1, 1.1), CFrame.new(x, 1.1, z) * CFrame.Angles(rng:NextNumber(-0.25, 0.25), rng:NextNumber(0, 3.14), rng:NextNumber(-0.3, 0.3)), i % 3 == 0 and boneDk or boneC, SM, CYL)
+end
+
+S.model.WorldPivot = frameCF
+for _, rec in ipairs(shrine) do
+if not rec.fire then rec.part.Transparency = (rec.ft or 0) + (1 - (rec.ft or 0)) * 0.9 end
+end
+S.model:PivotTo(frameCF * CFrame.new(0, -S.lift, 0))
 end
 
 local function buildBottles()
@@ -3092,7 +3742,17 @@ end
 if flat.Magnitude < 0.05 then flat = Vector3.new(0, 0, -1) end
 flat = flat.Unit
 buildSigil()
-buildShrine(center + flat * 90, center)
+S.blood = newPart(S.folder, Vector3.new(0.3, 320, 320), Color3.fromRGB(105, 4, 4), Enum.Material.SmoothPlastic, Enum.PartType.Cylinder)
+S.blood.Transparency = 1
+local shrineDist, shrineK = 90, 0.8
+if not opts.isSelf then
+local me = char() and char():FindFirstChild("HumanoidRootPart")
+if me then
+shrineK = math.clamp(0.8 * (me.Position - center).Magnitude / 150, 0.8, 1.5)
+shrineDist = 90 * shrineK / 0.8
+end
+end
+buildShrine(center + flat * shrineDist, center, shrineK)
 if not opts.isSelf then buildBottles() end
 local storm = newPart(S.folder, Vector3.new(80, 1, 80), Color3.new(1, 1, 1), Enum.Material.SmoothPlastic)
 storm.Transparency = 1
@@ -3115,15 +3775,7 @@ if not opts.isSelf then
 pillar = newPart(S.folder, Vector3.new(260, 3, 3), RED, Enum.Material.Neon, Enum.PartType.Cylinder)
 pillar.Transparency = 0.45
 end
-if not opts.isSelf then
-lance = newPart(S.folder, Vector3.new(70, 2.4, 2.4), Color3.fromRGB(255, 225, 190), Enum.Material.Neon, Enum.PartType.Cylinder)
-lanceGlow = newPart(S.folder, Vector3.new(74, 6, 6), Color3.fromRGB(255, 60, 20), Enum.Material.Neon, Enum.PartType.Cylinder)
-lanceGlow.Transparency = 0.6
-local tip = newPart(S.folder, Vector3.new(8, 5, 5), Color3.fromRGB(255, 255, 255), Enum.Material.Neon, Enum.PartType.Ball)
-table.insert(lanceBits, tip)
-local fe = fireEmitter(lance, 90, NumberRange.new(0.5, 1.1), NumberRange.new(3, 9), 5, Vector2.new(25, 25))
-fe.EmissionDirection = Enum.NormalId.Left
-end
+if not opts.isSelf then S.arrowObj = createArrowObj(S.folder) end
 for i = 1, 8 do
 local a = i * 2 * math.pi / 8
 local p = newPart(S.folder, Vector3.new(1, 1, 1), Color3.new(1, 1, 1), Enum.Material.SmoothPlastic)
@@ -3138,7 +3790,11 @@ if not opts.isSelf then
 local me = char() and char():FindFirstChild("HumanoidRootPart")
 near = me and (me.Position - root.Position).Magnitude < 130
 end
-if near then S.usesSky = true skyOn() end
+if near then
+S.usesSky = true
+skyOn()
+if not opts.isSelf then playImpact("開") end
+end
 if opts.isSelf then
 screenShow(S, true)
 shake(1.1, 0.6)
@@ -3155,7 +3811,7 @@ end)
 end)
 end
 local lastBolt = 0
-table.insert(S.conns, RunService.RenderStepped:Connect(function()
+local function frame()
 if not S.on then return end
 local r = opts.getRoot()
 if not r or not r.Parent then S.stop(true) return end
@@ -3164,6 +3820,31 @@ local age = now - t0
 local alpha = math.clamp(age / 0.6, 0, 1)
 center = Vector3.new(r.Position.X, center.Y, r.Position.Z)
 local spin = age * 0.8
+if S.blood then
+S.blood.CFrame = CFrame.new(center.X, center.Y - 0.06, center.Z) * CFrame.Angles(0, 0, math.pi / 2)
+S.blood.Transparency = 1 - 0.66 * alpha
+end
+if now - S.lastRipple > 0.75 then
+S.lastRipple = now
+pcall(function()
+local rg = newPart(S.folder, Vector3.new(0.25, 6, 6), math.random() < 0.5 and Color3.fromRGB(255, 60, 50) or Color3.fromRGB(255, 232, 222), Enum.Material.Neon, Enum.PartType.Cylinder)
+rg.Transparency = 0.3
+rg.CFrame = CFrame.new(center.X, center.Y + 0.04, center.Z) * CFrame.Angles(0, 0, math.pi / 2)
+TweenService:Create(rg, TweenInfo.new(2.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = Vector3.new(0.25, 290, 290), Transparency = 1 }):Play()
+Debris:AddItem(rg, 2.8)
+end)
+end
+if now - S.lastSlash > 0.09 and #slashes < 40 then
+S.lastSlash = now
+spawnSlash(r.Position, false)
+spawnSlash(r.Position, false)
+end
+if now - S.lastCleave > 0.7 and #slashes < 40 then
+S.lastCleave = now
+spawnSlash(r.Position, true)
+if opts.isSelf then playSound(S_SLASH, 0.3, 0.7 + math.random() * 0.5) end
+end
+updateSlashes(now)
 local cf0 = CFrame.new(center)
 for _, rec in ipairs(sigil) do
 rec.part.CFrame = cf0 * CFrame.Angles(0, spin * rec.spin, 0) * rec.off
@@ -3171,45 +3852,58 @@ rec.part.Transparency = 1 - 0.7 * alpha
 end
 local rise = math.clamp(age / 1.0, 0, 1)
 local e = 1 + 2.2 * (rise - 1) ^ 3 + 1.2 * (rise - 1) ^ 2
-local lift = -60 * (1 - e)
+local lift = -(S.lift or 60) * (1 - e)
+if S.model then
+local settleNow = rise >= 1 and not S.settled
+if rise < 1 or settleNow then
+local f = math.clamp(1 - rise * 1.1, 0, 1)
 for _, rec in ipairs(shrine) do
-if rec.fixed then
-rec.part.Position = center + rec.rel
-else
-rec.part.CFrame = frameCF * CFrame.new(0, lift, 0) * rec.off
-if not rec.fire then rec.part.Transparency = math.clamp(1 - rise * 1.1, 0, 1) * 0.9 end
+if not rec.fixed and not rec.fire then
+local ft = rec.ft or 0
+rec.part.Transparency = ft + (1 - ft) * f * 0.9
 end
+end
+if settleNow then S.settled = true end
+end
+if rise < 1 or now - (S.lastHover or 0) > 0.04 then
+S.lastHover = now
+local hover = rise >= 1 and math.sin(now * 0.8) * 1.3 * (S.shrineK or 0.8) / 0.8 or 0
+S.model:PivotTo(frameCF * CFrame.new(0, lift + hover, 0))
+end
+if S.glow then S.glow.Brightness = 3 + math.sin(now * 3.2) * 1.1 end
+end
+for _, rec in ipairs(shrine) do
+if rec.fixed then rec.part.Position = center + rec.rel end
 end
 storm.CFrame = CFrame.new(r.Position - Vector3.new(0, 6, 0))
 if pillar then
 pillar.CFrame = CFrame.new(r.Position + Vector3.new(0, 110, 0)) * CFrame.Angles(0, 0, math.pi / 2)
 pillar.Transparency = 0.4 + math.sin(now * 14) * 0.12
 end
-if lance then
+if S.arrowObj then
+local ar = S.arrowObj
 local look = r.CFrame.LookVector
-local cf
 if launchT then
 local travel = (now - launchT) * 650
-local pos = launchFrom + launchDir * travel
-cf = CFrame.lookAt(pos, pos + launchDir) * CFrame.Angles(0, math.rad(90), 0)
-if travel > 300 and not S.boomed then
+local apos = launchFrom + launchDir * travel
+if travel > 300 then
+if not S.boomed then
 S.boomed = true
-bigBoom(pos)
-lance.Transparency, lanceGlow.Transparency = 1, 1
-for _, b in ipairs(lanceBits) do b.Transparency = 1 end
-local em = lance:FindFirstChildOfClass("ParticleEmitter")
-if em then em.Enabled = false end
+bigBoom(apos)
+arrowVisibleObj(ar, false)
+S.arrowVis = false
 end
 else
-local pos = r.Position + Vector3.new(0, 13 + math.sin(now * 3) * 0.6, 0) + look * 6
-local grow = math.clamp(age / 0.8, 0, 1)
-cf = CFrame.lookAt(pos, pos + look) * CFrame.Angles(0, math.rad(90), 0)
-lance.Size = Vector3.new(70 * grow, 2.4, 2.4) * (1 + math.sin(now * 12) * 0.03)
-lanceGlow.Size = Vector3.new(74 * grow, 6 + math.sin(now * 9) * 1.2, 6 + math.sin(now * 9) * 1.2)
+poseArrow(ar, apos, launchDir, 3, 1, false)
 end
-lance.CFrame = cf
-lanceGlow.CFrame = cf
-for _, b in ipairs(lanceBits) do b.CFrame = cf * CFrame.new(lance.Size.X / 2 + 1, 0, 0) end
+else
+local grow = math.clamp(age / 0.8, 0, 1)
+local asc = math.max(0.05, 3 * (1 - (1 - grow) ^ 3))
+local apos = r.Position + Vector3.new(0, 13 + math.sin(now * 3) * 0.6, 0) + look * 6
+S.arrowPos = apos
+if not S.arrowVis then S.arrowVis = true arrowVisibleObj(ar, true) end
+poseArrow(ar, apos, look, asc, 1 + math.sin(now * 12) * 0.05, true)
+end
 end
 local n = #bottles
 for _, b in ipairs(bottles) do
@@ -3247,6 +3941,13 @@ if hum.CameraOffset ~= Vector3.zero then hum.CameraOffset = Vector3.zero end
 end
 end
 end
+end
+table.insert(S.conns, RunService.RenderStepped:Connect(function()
+local ok, err = pcall(frame)
+if not ok then
+warn("[Fuga] show error: " .. tostring(err))
+S.stop(true)
+end
 end))
 if not opts.isSelf then
 playSound(S_BASS, 0.7, 0.8)
@@ -3257,16 +3958,18 @@ end
 function S.flash()
 if not S.on then return end
 local root = opts.getRoot()
-if lance and not launchT then
+if S.arrowObj and not launchT then
 launchT = os.clock()
-launchFrom = lance.Position
+launchFrom = S.arrowPos or (root and root.Position) or Vector3.zero
 launchDir = root and root.CFrame.LookVector or Vector3.new(0, 0, -1)
+if not S.arrowVis then S.arrowVis = true arrowVisibleObj(S.arrowObj, true) end
 playSound(S_LAUNCH, 0.9, 0.8)
 end
 local me = char() and char():FindFirstChild("HumanoidRootPart")
 if root and me and (me.Position - root.Position).Magnitude < 160 then
 screenShow(S, false)
 shake(0.9, 0.35)
+playImpact("FUGA")
 end
 playSound(S_THUNDER, 0.7, 1.1)
 playSound(S_BOOM, 0.8, 0.7)
@@ -3290,7 +3993,7 @@ if folder then pcall(function() folder:Destroy() end) end
 if gui then pcall(function() gui:Destroy() end) end
 else
 if folder then
-for _, d in ipairs(folder:GetChildren()) do
+for _, d in ipairs(folder:GetDescendants()) do
 if d:IsA("BasePart") then pcall(function() TweenService:Create(d, TweenInfo.new(0.8, Enum.EasingStyle.Quad), { Transparency = 1 }):Play() end) end
 end
 for _, d in ipairs(folder:GetDescendants()) do
@@ -3303,6 +4006,11 @@ end
 table.clear(sigil)
 table.clear(shrine)
 table.clear(bottles)
+table.clear(slashes)
+if S.arrowObj then arrowVisibleObj(S.arrowObj, false) end
+S.arrowObj = nil
+S.blood = nil
+S.model, S.glow = nil, nil
 end
 return S
 end
@@ -3378,11 +4086,17 @@ if count >= 2 then return end
 local c = p.Character
 local root = c and c:FindFirstChild("HumanoidRootPart")
 local me = char() and char():FindFirstChild("HumanoidRootPart")
-if not root or not me or (me.Position - root.Position).Magnitude > 300 then return end
+if not root or not me or (me.Position - root.Position).Magnitude > CFG.watchRange then return end
 local show = newShow({ isSelf = false, getRoot = function() local ch = p.Character return ch and ch:FindFirstChild("HumanoidRootPart") end })
 show.byRockets = byRockets
 remoteShows[p] = show
-show.start()
+local okStart, errStart = pcall(show.start)
+if not okStart then
+warn("[Fuga] could not start the show: " .. tostring(errStart))
+remoteShows[p] = nil
+pcall(show.stop, true)
+return
+end
 show.voice = playVoice(root, 0.9)
 task.delay(15, function() if remoteShows[p] == show then remoteShows[p] = nil show.stop(false) fadeVoice(show.voice, 0) end end)
 return show
@@ -3460,6 +4174,118 @@ local s = remoteShows[p]
 if s then remoteShows[p] = nil s.stop(true) end
 end))
 
+local ringViews = {}
+local ringExtra = {} -- test subjects: { Character = model }
+local function ringBottle(folder)
+local b = newPart(folder, Vector3.new(2.6, 0.95, 0.95), Color3.fromRGB(95, 52, 22), Enum.Material.Glass, Enum.PartType.Cylinder)
+local cap = newPart(folder, Vector3.new(0.6, 1.05, 1.05), Color3.fromRGB(255, 120, 30), Enum.Material.Neon, Enum.PartType.Cylinder)
+local a0, a1 = Instance.new("Attachment"), Instance.new("Attachment")
+a0.Position, a1.Position = Vector3.new(0, 0.5, 0), Vector3.new(0, -0.5, 0)
+a0.Parent, a1.Parent = b, b
+local tr = Instance.new("Trail")
+tr.Attachment0, tr.Attachment1 = a0, a1
+tr.Lifetime = 0.5
+tr.LightEmission = 1
+tr.Color = ColorSequence.new(Color3.fromRGB(255, 190, 70), Color3.fromRGB(200, 30, 10))
+tr.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
+tr.Parent = b
+fireEmitter(cap, 35, NumberRange.new(0.4, 0.8), NumberRange.new(1, 3), 1.6, Vector2.new(15, 15))
+return { body = b, cap = cap }
+end
+local function ringHide(v, on)
+for tool in pairs(v.hidden) do
+if tool.Parent then
+for _, d in ipairs(tool:GetDescendants()) do
+if d:IsA("BasePart") then pcall(function() d.LocalTransparencyModifier = on and 1 or 0 end) end
+end
+end
+end
+end
+local function ringDrop(pl)
+local v = ringViews[pl]
+if not v then return end
+ringViews[pl] = nil
+pcall(ringHide, v, false)
+for _, cn in ipairs(v.conns) do pcall(function() cn:Disconnect() end) end
+if v.folder then pcall(function() v.folder:Destroy() end) end
+end
+local function ringDropAll()
+for pl in pairs(ringViews) do ringDrop(pl) end
+end
+local function ringFrame()
+local now = os.clock()
+local me = char() and char():FindFirstChild("HumanoidRootPart")
+local seen, shown = {}, 0
+if CFG.watch then
+local subjects = Players:GetPlayers()
+for _, x in ipairs(ringExtra) do table.insert(subjects, x) end
+for _, pl in ipairs(subjects) do
+if pl ~= lp and shown < 3 then
+local ch = pl.Character
+local rr = ch and ch:FindFirstChild("HumanoidRootPart")
+if rr and (not me or (rr.Position - me.Position).Magnitude < CFG.watchRange) then
+local tools = molotovsIn(ch)
+if #tools >= 2 then
+shown += 1
+seen[pl] = true
+local v = ringViews[pl]
+if not v then
+v = { hidden = {}, bottles = {}, conns = {}, born = now }
+v.folder = Instance.new("Folder")
+v.folder.Name = "FugaRing"
+v.folder.Parent = workspace
+ringViews[pl] = v
+end
+for _, t in ipairs(tools) do
+if not v.hidden[t] then
+v.hidden[t] = true
+for _, d in ipairs(t:GetDescendants()) do
+if d:IsA("BasePart") then pcall(function() d.LocalTransparencyModifier = 1 end) end
+end
+table.insert(v.conns, t.DescendantAdded:Connect(function(d)
+if d:IsA("BasePart") then pcall(function() d.LocalTransparencyModifier = 1 end) end
+end))
+end
+end
+local want = remoteShows[pl] and 0 or math.min(#tools, 12)
+while #v.bottles < want do table.insert(v.bottles, ringBottle(v.folder)) end
+while #v.bottles > want do
+local b = table.remove(v.bottles)
+pcall(function() b.body:Destroy() b.cap:Destroy() end)
+end
+local grow = math.clamp((now - v.born) / 0.6, 0, 1)
+local spin = now * 0.8
+for i, b in ipairs(v.bottles) do
+local k = (i - 1) % 3
+local m = math.max(1, math.ceil((want - k) / 3))
+local j = (i - 1 - k) // 3
+local R = 5.8 * grow
+local ang = spin * 1.6 * (k % 2 == 0 and 1.3 or -1.3) + j * 2 * math.pi / m
+local tilt = k == 0 and CFrame.new() or (k == 1 and CFrame.Angles(math.rad(62), 0, 0) or CFrame.Angles(0, 0, math.rad(62)))
+local rot = CFrame.Angles(0, spin * 0.6, 0) * tilt
+local off = rot:VectorToWorldSpace(Vector3.new(math.cos(ang), 0, math.sin(ang))) * R
+local pos = rr.Position + Vector3.new(0, 4.5, 0) + off
+local face = CFrame.lookAt(pos, pos + off) * CFrame.Angles(math.rad(-90), 0, 0)
+b.body.CFrame = face * CFrame.Angles(0, 0, math.pi / 2)
+b.cap.CFrame = face * CFrame.new(0, 1.55, 0) * CFrame.Angles(0, 0, math.pi / 2)
+end
+end
+end
+end
+end
+end
+for pl in pairs(ringViews) do
+if not seen[pl] then ringDrop(pl) end
+end
+end
+table.insert(conns, RunService.RenderStepped:Connect(function()
+local ok, err = pcall(ringFrame)
+if not ok then
+warn("[Fuga] ring view error: " .. tostring(err))
+ringDropAll()
+end
+end))
+
 cineCleanup = function() cineOff(true) megaStop(true) end
 
 local function sayChat(text)
@@ -3488,7 +4314,7 @@ playSound(S_BASS, 1.5, 0.55)
 playSound(S_BOOM, 0.9, 0.7)
 playSound(S_WHOOSH, 0.5, 0.55)
 if CFG.voiceId and CFG.voiceId ~= "" then playSound(CFG.voiceId, 2, 1) end -- your own audio id for a voice line, if you set one
-playImpact()
+playImpact("開")
 cineOn()
 end
 local function releaseEffects()
@@ -3505,6 +4331,20 @@ playSound(S_LAUNCH, 0.9, 0.8)
 playSound(S_SLASH, 1, 0.5)
 playSound(S_THUNDER, 0.5, 1.1)
 cineOff()
+if CFG.mega then
+task.delay(0.12, function() playImpact("FUGA") end)
+task.delay(0.4, function()
+pcall(function()
+local rootp = char() and char():FindFirstChild("HumanoidRootPart")
+if not rootp then return end
+local tp = mouse.Hit.Position
+local off = tp - rootp.Position
+if off.Magnitude < CFG.safeDistance then return end -- never draw a blast on top of yourself
+if off.Magnitude > 450 then tp = rootp.Position + off.Unit * 450 end
+bigBoom(tp)
+end)
+end)
+end
 end
 
 local function updateFx(root, charge)
@@ -3855,6 +4695,7 @@ getgenv().FugaRing = {
 cfg = CFG,
 checkAim = function(t) return checkAim(t) end, -- (Vector3) -> safe, reason, distance (for testing)
 cue = remoteCue, -- (player, "Kai." or "FUGA.") shows the effects around another player, for testing
+ringTest = ringExtra, -- add { Character = model } here to try another player's Molotov ring display
 set = setOn,
 isOn = function() return on end,
 release = function() task.spawn(volley) end,
@@ -3869,7 +4710,7 @@ if not on or not haveMolotov() then toast("Hold a Molotov first (turn the ring o
 arrowState = "charge"
 arrowT = os.clock()
 pressEffects()
-task.delay(1.8, function()
+task.delay(CFG.previewTime or 1.8, function()
 if arrowState == "charge" and not spraying then arrowState = "launch" arrowT = os.clock() releaseEffects() end
 end)
 end,
@@ -3880,6 +4721,7 @@ table.clear(conns)
 fugaStopped = true
 releaseAll()
 megaStopAll()
+ringDropAll()
 getgenv().FugaRing = nil
 end,
 }
@@ -5975,6 +6817,10 @@ addToggle(gate, "  Swords and spears fly out on every shot", function() local g 
 addToggle(gate, "  See other players' gates (needs the same script, 2+ guns out)", function() local g = api("FloatGuns") return g and g.cfg.watchOthers end, function(v) local g = api("FloatGuns") if g then g.cfg.watchOthers = v end end)
 addToggle(gate, "  Impact frame when the gate opens", function() local g = api("FloatGuns") return g and g.cfg.impact end, function(v) local g = api("FloatGuns") if g then g.cfg.impact = v end end)
 addToggle(gate, "  Gold flash when a barrage starts", function() local g = api("FloatGuns") return g and g.cfg.impactOnFire end, function(v) local g = api("FloatGuns") if g then g.cfg.impactOnFire = v end end)
+addToggle(gate, "  Sky gates that rain swords (needs the sigil toggle on)", function() local g = api("FloatGuns") return g and g.cfg.sky end, function(v) local g = api("FloatGuns") if g then g.cfg.sky = v end end)
+addSlider(gate, "Sky gates", 2, 16, 1, function() local g = api("FloatGuns") return g and g.cfg.skyGates or 10 end, function(v) local g = api("FloatGuns") if g then g.cfg.skyGates = v end end)
+addSlider(gate, "Sky swords per shot", 0, 4, 1, function() local g = api("FloatGuns") return g and g.cfg.skyBarrage or 2 end, function(v) local g = api("FloatGuns") if g then g.cfg.skyBarrage = v end end)
+addToggle(gate, "  Gold aura around the owner", function() local g = api("FloatGuns") return g and g.cfg.bodyAura end, function(v) local g = api("FloatGuns") if g then g.cfg.bodyAura = v end end)
 addToggle(gate, "  Ground sigil, light pillar, gold dust", function() local g = api("FloatGuns") return g and g.cfg.aura end, function(v) local g = api("FloatGuns") if g then g.cfg.aura = v end end)
 addToggle(gate, "  Gold screen tint", function() local g = api("FloatGuns") return g and g.cfg.tint end, function(v) local g = api("FloatGuns") if g then g.cfg.tint = v end end)
 addToggle(gate, "  Camera shake when the gate opens", function() local g = api("FloatGuns") return g and g.cfg.shake end, function(v) local g = api("FloatGuns") if g then g.cfg.shake = v end end)
@@ -5987,7 +6833,7 @@ addSlider(gate, "Portal hum volume", 0, 3, 0.05, function() local g = api("Float
 addSlider(gate, "Portal size", 1.5, 8, 0.1, function() local g = api("FloatGuns") return g and g.cfg.portalSize or 3.0 end, function(v) local g = api("FloatGuns") if g then g.cfg.portalSize = v end end)
 addSlider(gate, "Sword speed", 120, 700, 10, function() local g = api("FloatGuns") return g and g.cfg.swordSpeed or 340 end, function(v) local g = api("FloatGuns") if g then g.cfg.swordSpeed = v end end)
 addButton(gate, "Download / reload sound files", function() local g = api("FloatGuns") if g and g.fx then g.fx.reloadSounds() end end)
-infoLabel(gate, "Music and shot sounds download by themselves the first time. If they are missing, press the button above. You can also put your own gate_theme.mp3 / gate_shot.mp3 in the executor's workspace folder. The portals and swords are only on your own screen.", 70)
+infoLabel(gate, "Music and shot sounds download by themselves the first time. If they are missing, press the button above. You can also put your own gate_theme.mp3 / gate_shot.mp3 in the executor's workspace folder. Other players who run this same script see your gate too (when you have 2+ guns out), and you see theirs.", 70)
 infoLabel(gate, "Takes effect when you equip a gun. If a gun ever will not fire, turn this off, rejoin, and tell the owner.", 44)
 
 local fuga = newTab("Fuga")
@@ -6223,6 +7069,7 @@ end
 end
 end)
 end
+
 
 ]==]
 
