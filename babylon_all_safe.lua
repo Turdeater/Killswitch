@@ -927,7 +927,8 @@ sound = true,        -- sound effects while you spray (the game's built-in sound
 formation = "gyro",  -- how the Molotovs float while idle (other players see this): ring, gyro, wings, halo
 pose = true,         -- raise your arms in a hand-sign pose while you spray (other players see this)
 detach = false,      -- EXPERIMENT, KEEP OFF: placing the bottles directly made the server delete them after about 2.4 seconds
-chat = false,        -- say "Kai." and "FUGA." in the game chat when you start spraying (everyone sees it)
+chat = true,         -- say "Kai." when you start spraying and "FUGA." when you finish. Everyone sees the chat lines; players running this script also see the show around you
+watch = true,        -- show the Fuga effects around other players who run this script when their chat lines arrive
 safeDistance = 25,   -- studs: a throw is held back if your cursor is pointing closer than this to you (it would burn you)
 voiceId = "",        -- optional: your own Roblox audio id (for example "rbxassetid://123456") played when the ring fires
 faceOffset = CFrame.Angles(math.rad(-90), 0, 0), -- how a bottle sits relative to its look direction
@@ -940,6 +941,7 @@ local POSE_R, POSE_L = math.rad(110), math.rad(-110) -- arm raise angles: both a
 local FORMS = { "ring", "gyro", "wings", "halo" }
 local smoothPos = setmetatable({}, { __mode = "k" })
 local lastChat = 0
+local cueSent = false
 local fireBlend = 0 -- 0 = the ring floats around you, 1 = the Molotovs form a firing circle in front of you
 local lastWarn = 0
 local startT = 0
@@ -1446,14 +1448,12 @@ end)
 end)
 end
 local Lighting = game:GetService("Lighting")
-local megaOn = false
-local megaFolder, megaGui = nil, nil
-local megaConns = {}
-local skyOrig, bloomFx = nil, nil
+local skyOrig, bloomFx, skyUsers = nil, nil, 0
 local shakeUntil, shakeMag = 0, 0
-local megaT0 = 0
-local sigilParts, shrineParts, sigilCenter, shrineFrame = {}, {}, Vector3.zero, CFrame.new()
-local function newPart(size, color, material, shape)
+local selfShow = nil
+local remoteShows = {}
+local RED, WHITE = Color3.fromRGB(255, 40, 20), Color3.fromRGB(255, 235, 215)
+local function newPart(folder, size, color, material, shape)
 local p = Instance.new("Part")
 p.Anchored = true
 p.CanCollide = false
@@ -1464,16 +1464,16 @@ p.Size = size
 p.Color = color
 p.Material = material or Enum.Material.Neon
 if shape then p.Shape = shape end
-p.Parent = megaFolder
+p.Parent = folder
 return p
 end
-local function groundY(root)
-local y = root.Position.Y - 2.9
+local function groundYAt(pos, ignore)
+local y = pos.Y - 2.9
 pcall(function()
 local rp = RaycastParams.new()
 rp.FilterType = Enum.RaycastFilterType.Exclude
-rp.FilterDescendantsInstances = { char() }
-local hit = workspace:Raycast(root.Position, Vector3.new(0, -14, 0), rp)
+rp.FilterDescendantsInstances = { ignore }
+local hit = workspace:Raycast(pos, Vector3.new(0, -14, 0), rp)
 if hit then y = hit.Position.Y + 0.15 end
 end)
 return y
@@ -1482,92 +1482,8 @@ local function shake(mag, dur)
 shakeMag = math.max(shakeMag, mag)
 shakeUntil = math.max(shakeUntil, os.clock() + dur)
 end
-local function megaKick() -- one small shake per Molotov thrown
-if megaOn then shake(0.35, 0.18) end
-end
-local function buildSigil(c)
-local red, white = Color3.fromRGB(255, 40, 20), Color3.fromRGB(255, 235, 215)
-local function polygon(sides, radius, rot, color, dir, thick)
-for i = 1, sides do
-local a1 = rot + (i - 1) * 2 * math.pi / sides
-local a2 = rot + i * 2 * math.pi / sides
-local v1 = Vector3.new(math.cos(a1), 0, math.sin(a1)) * radius
-local v2 = Vector3.new(math.cos(a2), 0, math.sin(a2)) * radius
-local mid = (v1 + v2) / 2
-local len = (v2 - v1).Magnitude
-local p = newPart(Vector3.new(thick or 0.5, 0.3, len + (thick or 0.5) * 0.8), color)
-table.insert(sigilParts, { part = p, off = CFrame.lookAt(mid + Vector3.new(0, 0.1, 0), mid + (v2 - v1) + Vector3.new(0, 0.1, 0)), spin = dir })
-end
-end
-polygon(36, 15, 0, red, 1, 0.7)
-polygon(30, 12.4, 0, white, 1, 0.4)
-polygon(20, 5.5, 0, red, 1, 0.5)
-polygon(4, 11.2, math.pi / 4, red, 1)
-polygon(4, 11.2, 0, red, 1)
-polygon(3, 7, 0, white, -1.6)
-polygon(3, 7, math.pi, white, -1.6)
-for i = 1, 16 do
-local a = i * 2 * math.pi / 16
-local dir = Vector3.new(math.cos(a), 0, math.sin(a))
-local p = newPart(Vector3.new(0.45, 0.3, 2.4), i % 2 == 0 and red or white)
-table.insert(sigilParts, { part = p, off = CFrame.lookAt(dir * 13.7 + Vector3.new(0, 0.1, 0), dir * 20 + Vector3.new(0, 0.1, 0)), spin = 1 })
-end
-sigilCenter = c
-end
-local function buildShrine(rootPos, lookFlat, y)
-local K = 0.8
-local dark = Color3.fromRGB(24, 12, 12)
-local red = Color3.fromRGB(255, 35, 20)
-local pos = Vector3.new(rootPos.X, y, rootPos.Z) + lookFlat * 90
-shrineFrame = CFrame.lookAt(pos, Vector3.new(rootPos.X, y, rootPos.Z))
-local function add(size, off, color, material, shape, fire)
-local p = newPart(size * K, color, material, shape)
-local rec = { part = p, off = CFrame.new(off.Position * K) * (off - off.Position) }
-table.insert(shrineParts, rec)
-if fire then
-local e = Instance.new("ParticleEmitter")
-e.Texture = FIRE_TEX
-e.LightEmission = 1
-e.Rate = 18
-e.Lifetime = NumberRange.new(0.8, 1.6)
-e.Speed = NumberRange.new(6, 12)
-e.SpreadAngle = Vector2.new(20, 20)
-e.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 7), NumberSequenceKeypoint.new(1, 0) })
-e.Color = ColorSequence.new(Color3.fromRGB(255, 200, 90), Color3.fromRGB(210, 30, 10))
-e.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.2), NumberSequenceKeypoint.new(1, 1) })
-e.Parent = p
-end
-return p
-end
-local cyl = Enum.PartType.Cylinder
-for _, sx in ipairs({ -20, 20 }) do
-add(Vector3.new(36, 4.2, 4.2), CFrame.new(sx, 18, 0) * CFrame.Angles(0, 0, math.pi / 2), dark, Enum.Material.Slate, cyl)
-for _, yy in ipairs({ 3, 11, 19 }) do
-add(Vector3.new(0.7, 4.9, 4.9), CFrame.new(sx, yy, 0) * CFrame.Angles(0, 0, math.pi / 2), red, Enum.Material.Neon, cyl)
-end
-end
-add(Vector3.new(56, 2, 2.4), CFrame.new(0, 24, 0), dark, Enum.Material.Slate)
-add(Vector3.new(56, 0.35, 2.7), CFrame.new(0, 25.1, 0), red)
-add(Vector3.new(66, 3, 3.2), CFrame.new(0, 31, 0), dark, Enum.Material.Slate)
-add(Vector3.new(66, 0.4, 3.5), CFrame.new(0, 32.7, 0), red)
-add(Vector3.new(86, 3, 10), CFrame.new(0, 35, 0), dark, Enum.Material.Slate)
-add(Vector3.new(86, 0.45, 10.4), CFrame.new(0, 33.4, 0), red)
-add(Vector3.new(15, 3, 10), CFrame.new(-44, 36.8, 0) * CFrame.Angles(0, 0, math.rad(20)), dark, Enum.Material.Slate)
-add(Vector3.new(15, 3, 10), CFrame.new(44, 36.8, 0) * CFrame.Angles(0, 0, math.rad(-20)), dark, Enum.Material.Slate)
-add(Vector3.new(60, 3, 7), CFrame.new(0, 38.6, 0), dark, Enum.Material.Slate)
-add(Vector3.new(60, 0.4, 7.4), CFrame.new(0, 40.2, 0), red)
-local eye = add(Vector3.new(6, 6, 6), CFrame.new(0, 28, 0), red, Enum.Material.Neon, Enum.PartType.Ball)
-local light = Instance.new("PointLight")
-light.Color = Color3.fromRGB(255, 60, 30)
-light.Range = 70
-light.Brightness = 4
-light.Parent = eye
-add(Vector3.new(1.4, 6, 6.2), CFrame.new(0, 28, 0), Color3.fromRGB(255, 240, 220), Enum.Material.Neon, Enum.PartType.Ball)
-for _, fx in ipairs({ -36, -18, 0, 18, 36 }) do
-add(Vector3.new(1, 1, 1), CFrame.new(fx, 41, 0), red, Enum.Material.Neon, nil, true).Transparency = 1
-end
-end
 local function skyOn()
+skyUsers += 1
 if skyOrig then return end
 skyOrig = {
 Ambient = Lighting.Ambient, OutdoorAmbient = Lighting.OutdoorAmbient, Brightness = Lighting.Brightness,
@@ -1589,6 +1505,9 @@ TweenService:Create(bloomFx, TweenInfo.new(0.5), { Intensity = 0.7 }):Play()
 end)
 end
 local function skyOff(instant)
+skyUsers = math.max(0, skyUsers - 1)
+if skyUsers > 0 and not instant then return end
+if instant then skyUsers = 0 end
 local o = skyOrig
 skyOrig = nil
 if bloomFx then
@@ -1608,43 +1527,57 @@ TweenService:Create(Lighting, TweenInfo.new(0.9, Enum.EasingStyle.Quad), o):Play
 end
 end
 end
-local function bolt(from, to, color)
+local function bolt(folder, from, to, color)
 local segs, prev = 9, from
 for i = 1, segs do
-local t = i / segs
-local p = from:Lerp(to, t)
+local p = from:Lerp(to, i / segs)
 if i < segs then p += Vector3.new((math.random() - 0.5) * 9, 0, (math.random() - 0.5) * 9) end
 local len = (p - prev).Magnitude
 if len > 0.1 then
-local seg = newPart(Vector3.new(0.45, 0.45, len), color)
+local seg = newPart(folder, Vector3.new(0.45, 0.45, len), color)
 seg.CFrame = CFrame.lookAt((prev + p) / 2, p)
 Debris:AddItem(seg, 0.14)
 end
 prev = p
 end
 end
-local function overlayFx()
+local function fireEmitter(parent, rate, life, speed, size, spread)
+local e = Instance.new("ParticleEmitter")
+e.Texture = FIRE_TEX
+e.LightEmission = 1
+e.Rate = rate
+e.Lifetime = life
+e.Speed = speed
+e.SpreadAngle = spread or Vector2.new(10, 10)
+e.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, size), NumberSequenceKeypoint.new(1, 0) })
+e.Color = ColorSequence.new(Color3.fromRGB(255, 220, 130), Color3.fromRGB(210, 30, 10))
+e.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.15), NumberSequenceKeypoint.new(1, 1) })
+e.Parent = parent
+return e
+end
+local function screenShow(S, withKanji)
 pcall(function()
-megaGui = Instance.new("ScreenGui")
-megaGui.Name = "FugaMegaGui"
-megaGui.IgnoreGuiInset = true
-megaGui.ResetOnSpawn = false
-megaGui.DisplayOrder = 40
-megaGui.Parent = lp:WaitForChild("PlayerGui")
-local gui = megaGui
+if not S.gui then
+S.gui = Instance.new("ScreenGui")
+S.gui.Name = "FugaMegaGui"
+S.gui.IgnoreGuiInset = true
+S.gui.ResetOnSpawn = false
+S.gui.DisplayOrder = 40
+S.gui.Parent = lp:WaitForChild("PlayerGui")
+end
+local gui = S.gui
 task.spawn(function()
 for i = 1, 8 do
-if megaGui ~= gui then return end
+if S.gui ~= gui then return end
 pcall(function()
 local cam = workspace.CurrentCamera
 local vp = cam and cam.ViewportSize or Vector2.new(1920, 1080)
-local ang = math.random(-35, 35) + (i % 2 == 0 and 180 or 0)
 local glow = Instance.new("Frame")
 glow.AnchorPoint = Vector2.new(0.5, 0.5)
 glow.Position = UDim2.fromOffset(vp.X * (0.2 + math.random() * 0.6), vp.Y * (0.2 + math.random() * 0.6))
 glow.Size = UDim2.fromOffset(0, 16)
-glow.Rotation = ang
-glow.BackgroundColor3 = Color3.fromRGB(255, 30, 20)
+glow.Rotation = math.random(-35, 35) + (i % 2 == 0 and 180 or 0)
+glow.BackgroundColor3 = RED
 glow.BorderSizePixel = 0
 glow.Parent = gui
 local core = Instance.new("Frame")
@@ -1654,8 +1587,7 @@ core.Size = UDim2.new(1, 0, 0, 4)
 core.BackgroundColor3 = Color3.new(1, 1, 1)
 core.BorderSizePixel = 0
 core.Parent = glow
-local info = TweenInfo.new(0.09, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-TweenService:Create(glow, info, { Size = UDim2.fromOffset(vp.X * 1.5, 16) }):Play()
+TweenService:Create(glow, TweenInfo.new(0.09, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = UDim2.fromOffset(vp.X * 1.5, 16) }):Play()
 task.delay(0.1, function()
 TweenService:Create(glow, TweenInfo.new(0.35), { BackgroundTransparency = 1, Size = UDim2.fromOffset(vp.X * 1.5, 2) }):Play()
 TweenService:Create(core, TweenInfo.new(0.35), { BackgroundTransparency = 1 }):Play()
@@ -1666,8 +1598,9 @@ playSound(S_SLASH, 0.5, 0.9 + math.random() * 0.4)
 task.wait(0.05)
 end
 end)
+if withKanji then
 task.delay(0.45, function()
-if megaGui ~= gui then return end
+if S.gui ~= gui then return end
 pcall(function()
 local lbl = Instance.new("TextLabel")
 lbl.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -1681,7 +1614,7 @@ lbl.TextColor3 = Color3.fromRGB(255, 245, 235)
 lbl.TextTransparency = 1
 lbl.Parent = gui
 local stroke = Instance.new("UIStroke")
-stroke.Color = Color3.fromRGB(255, 20, 10)
+stroke.Color = RED
 stroke.Thickness = 14
 stroke.Transparency = 1
 stroke.Parent = lbl
@@ -1695,72 +1628,171 @@ TweenService:Create(stroke, TweenInfo.new(0.7), { Transparency = 1 }):Play()
 end)
 end)
 end)
+end
 end)
 end
-local function megaStop(instant)
-if not megaOn and not megaFolder and not megaGui then return end
-megaOn = false
-skyOff(instant)
-local folder, gui = megaFolder, megaGui
-for _, cn in ipairs(megaConns) do pcall(function() cn:Disconnect() end) end
-table.clear(megaConns)
-local hum = char() and char():FindFirstChildOfClass("Humanoid")
-if hum then pcall(function() hum.CameraOffset = Vector3.zero end) end
-shakeUntil, shakeMag = 0, 0
-if instant then
-if folder then pcall(function() folder:Destroy() end) end
-if gui then pcall(function() gui:Destroy() end) end
-megaFolder, megaGui = nil, nil
-else
-if folder then
-local info = TweenInfo.new(0.8, Enum.EasingStyle.Quad)
-for _, d in ipairs(folder:GetChildren()) do
-if d:IsA("BasePart") then pcall(function() TweenService:Create(d, info, { Transparency = 1 }):Play() end) end
-end
-for _, d in ipairs(folder:GetDescendants()) do
-if d:IsA("ParticleEmitter") then d.Enabled = false end
-end
-task.delay(1.2, function() pcall(function() folder:Destroy() end) end)
-end
-if gui then task.delay(1.5, function() pcall(function() gui:Destroy() end) end) end
-megaFolder, megaGui = nil, nil
-end
-table.clear(sigilParts)
-table.clear(shrineParts)
-end
-local function megaStart()
-if megaOn or not CFG.mega then return end
-local c = char()
-local root = c and c:FindFirstChild("HumanoidRootPart")
-if not root then return end
-megaStop(true)
-megaOn = true
-megaT0 = os.clock()
+local function bigBoom(pos)
 pcall(function()
-megaFolder = Instance.new("Folder")
-megaFolder.Name = "FugaMega"
-megaFolder.Parent = workspace
-local gy = groundY(root)
+local function sphere(color, endSize, dur, startT)
+local p = Instance.new("Part")
+p.Shape = Enum.PartType.Ball
+p.Anchored, p.CanCollide, p.CanQuery, p.CanTouch, p.CastShadow = true, false, false, false, false
+p.Material = Enum.Material.Neon
+p.Color = color
+p.Transparency = startT
+p.Size = Vector3.new(6, 6, 6)
+p.CFrame = CFrame.new(pos)
+p.Parent = workspace
+TweenService:Create(p, TweenInfo.new(dur, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = Vector3.new(endSize, endSize, endSize), Transparency = 1 }):Play()
+Debris:AddItem(p, dur + 0.2)
+end
+sphere(Color3.fromRGB(255, 80, 20), 150, 0.9, 0.15)
+sphere(Color3.fromRGB(255, 240, 220), 70, 0.45, 0)
+for i = 1, 3 do
+local ring = Instance.new("Part")
+ring.Shape = Enum.PartType.Cylinder
+ring.Anchored, ring.CanCollide, ring.CanQuery, ring.CanTouch, ring.CastShadow = true, false, false, false, false
+ring.Material = Enum.Material.Neon
+ring.Color = i == 2 and Color3.fromRGB(255, 235, 215) or Color3.fromRGB(255, 40, 20)
+ring.Size = Vector3.new(0.6, 8, 8)
+ring.CFrame = CFrame.new(pos) * CFrame.Angles(math.rad(i * 55), math.rad(i * 70), math.pi / 2)
+ring.Parent = workspace
+TweenService:Create(ring, TweenInfo.new(0.8, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = Vector3.new(0.8, 200, 200), Transparency = 1 }):Play()
+Debris:AddItem(ring, 1)
+end
+local sp = Instance.new("Part")
+sp.Anchored, sp.CanCollide, sp.CanQuery, sp.CanTouch = true, false, false, false
+sp.Transparency = 1
+sp.Size = Vector3.new(1, 1, 1)
+sp.CFrame = CFrame.new(pos)
+sp.Parent = workspace
+local e = fireEmitter(sp, 0, NumberRange.new(1, 2.2), NumberRange.new(40, 120), 9, Vector2.new(180, 180))
+e:Emit(260)
+Debris:AddItem(sp, 3)
+local me = char() and char():FindFirstChild("HumanoidRootPart")
+if me and (me.Position - pos).Magnitude < 400 then shake(1.2, 0.5) end
+playSound(S_BOOM, 1, 0.6)
+playSound(S_THUNDER, 0.8, 0.9)
+end)
+end
+local function newShow(opts)
+local S = { on = false, folder = nil, gui = nil, conns = {}, usesSky = false }
+local sigil, shrine, bottles = {}, {}, {}
+local center, frameCF, t0 = Vector3.zero, CFrame.new(), 0
+local lance, lanceGlow, lanceBits = nil, nil, {}
+local launchT, launchFrom, launchDir = nil, nil, nil
+local function polygon(sides, radius, rot, color, dir, thick)
+for i = 1, sides do
+local a1 = rot + (i - 1) * 2 * math.pi / sides
+local a2 = rot + i * 2 * math.pi / sides
+local v1 = Vector3.new(math.cos(a1), 0, math.sin(a1)) * radius
+local v2 = Vector3.new(math.cos(a2), 0, math.sin(a2)) * radius
+local mid = (v1 + v2) / 2
+local th = thick or 0.5
+local p = newPart(S.folder, Vector3.new(th, 0.3, (v2 - v1).Magnitude + th * 0.8), color)
+table.insert(sigil, { part = p, off = CFrame.lookAt(mid + Vector3.new(0, 0.1, 0), mid + (v2 - v1) + Vector3.new(0, 0.1, 0)), spin = dir })
+end
+end
+local function buildSigil()
+polygon(36, 15, 0, RED, 1, 0.7)
+polygon(30, 12.4, 0, WHITE, 1, 0.4)
+polygon(20, 5.5, 0, RED, 1, 0.5)
+polygon(4, 11.2, math.pi / 4, RED, 1)
+polygon(4, 11.2, 0, RED, 1)
+polygon(3, 7, 0, WHITE, -1.6)
+polygon(3, 7, math.pi, WHITE, -1.6)
+for i = 1, 16 do
+local a = i * 2 * math.pi / 16
+local d = Vector3.new(math.cos(a), 0, math.sin(a))
+local p = newPart(S.folder, Vector3.new(0.45, 0.3, 2.4), i % 2 == 0 and RED or WHITE)
+table.insert(sigil, { part = p, off = CFrame.lookAt(d * 13.7 + Vector3.new(0, 0.1, 0), d * 20 + Vector3.new(0, 0.1, 0)), spin = 1 })
+end
+end
+local function buildShrine(pos, towards)
+local K = 0.8
+local dark = Color3.fromRGB(24, 12, 12)
+frameCF = CFrame.lookAt(pos, towards)
+local function add(size, off, color, material, shape, fire)
+local p = newPart(S.folder, size * K, color, material, shape)
+table.insert(shrine, { part = p, off = CFrame.new(off.Position * K) * (off - off.Position), fire = fire })
+if fire then fireEmitter(p, 18, NumberRange.new(0.8, 1.6), NumberRange.new(6, 12), 7, Vector2.new(20, 20)) p.Transparency = 1 end
+return p
+end
+local cyl = Enum.PartType.Cylinder
+for _, sx in ipairs({ -20, 20 }) do
+add(Vector3.new(36, 4.2, 4.2), CFrame.new(sx, 18, 0) * CFrame.Angles(0, 0, math.pi / 2), dark, Enum.Material.Slate, cyl)
+for _, yy in ipairs({ 3, 11, 19 }) do
+add(Vector3.new(0.7, 4.9, 4.9), CFrame.new(sx, yy, 0) * CFrame.Angles(0, 0, math.pi / 2), RED, Enum.Material.Neon, cyl)
+end
+end
+add(Vector3.new(56, 2, 2.4), CFrame.new(0, 24, 0), dark, Enum.Material.Slate)
+add(Vector3.new(56, 0.35, 2.7), CFrame.new(0, 25.1, 0), RED)
+add(Vector3.new(66, 3, 3.2), CFrame.new(0, 31, 0), dark, Enum.Material.Slate)
+add(Vector3.new(66, 0.4, 3.5), CFrame.new(0, 32.7, 0), RED)
+add(Vector3.new(86, 3, 10), CFrame.new(0, 35, 0), dark, Enum.Material.Slate)
+add(Vector3.new(86, 0.45, 10.4), CFrame.new(0, 33.4, 0), RED)
+add(Vector3.new(15, 3, 10), CFrame.new(-44, 36.8, 0) * CFrame.Angles(0, 0, math.rad(20)), dark, Enum.Material.Slate)
+add(Vector3.new(15, 3, 10), CFrame.new(44, 36.8, 0) * CFrame.Angles(0, 0, math.rad(-20)), dark, Enum.Material.Slate)
+add(Vector3.new(60, 3, 7), CFrame.new(0, 38.6, 0), dark, Enum.Material.Slate)
+add(Vector3.new(60, 0.4, 7.4), CFrame.new(0, 40.2, 0), RED)
+local eye = add(Vector3.new(6, 6, 6), CFrame.new(0, 28, 0), RED, Enum.Material.Neon, Enum.PartType.Ball)
+local light = Instance.new("PointLight")
+light.Color = Color3.fromRGB(255, 60, 30)
+light.Range = 70
+light.Brightness = 4
+light.Parent = eye
+add(Vector3.new(1.4, 6, 6.2), CFrame.new(0, 28, 0), WHITE, Enum.Material.Neon, Enum.PartType.Ball)
+for _, fx in ipairs({ -36, -18, 0, 18, 36 }) do
+add(Vector3.new(1, 1, 1), CFrame.new(fx, 41, 0), RED, Enum.Material.Neon, nil, true)
+end
+end
+local function buildBottles()
+for i = 1, 9 do
+local b = newPart(S.folder, Vector3.new(2.6, 0.95, 0.95), Color3.fromRGB(95, 52, 22), Enum.Material.Glass, Enum.PartType.Cylinder)
+local cap = newPart(S.folder, Vector3.new(0.6, 1.05, 1.05), Color3.fromRGB(255, 120, 30), Enum.Material.Neon, Enum.PartType.Cylinder)
+local a0, a1 = Instance.new("Attachment"), Instance.new("Attachment")
+a0.Position, a1.Position = Vector3.new(0, 0.5, 0), Vector3.new(0, -0.5, 0)
+a0.Parent, a1.Parent = b, b
+local tr = Instance.new("Trail")
+tr.Attachment0, tr.Attachment1 = a0, a1
+tr.Lifetime = 0.5
+tr.LightEmission = 1
+tr.Color = ColorSequence.new(Color3.fromRGB(255, 190, 70), Color3.fromRGB(200, 30, 10))
+tr.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
+tr.Parent = b
+fireEmitter(cap, 35, NumberRange.new(0.4, 0.8), NumberRange.new(1, 3), 1.6, Vector2.new(15, 15))
+table.insert(bottles, { body = b, cap = cap, i = i })
+end
+end
+function S.start()
+if S.on then return end
+local root = opts.getRoot()
+if not root then return end
+S.on = true
+t0 = os.clock()
+S.folder = Instance.new("Folder")
+S.folder.Name = "FugaMega"
+S.folder.Parent = workspace
+local gy = groundYAt(root.Position, root.Parent)
+center = Vector3.new(root.Position.X, gy, root.Position.Z)
+local flat
+if opts.isSelf then
 local cam = workspace.CurrentCamera
-local look = cam and cam.CFrame.LookVector * Vector3.new(1, 0, 1) or root.CFrame.LookVector * Vector3.new(1, 0, 1)
-if look.Magnitude < 0.05 then look = Vector3.new(0, 0, -1) end
-look = look.Unit
-buildSigil(Vector3.new(root.Position.X, gy, root.Position.Z))
-buildShrine(root.Position, look, gy)
-local storm = newPart(Vector3.new(80, 1, 80), Color3.new(1, 1, 1), Enum.Material.SmoothPlastic)
+flat = cam and cam.CFrame.LookVector * Vector3.new(1, 0, 1) or Vector3.zero
+else
+local me = char() and char():FindFirstChild("HumanoidRootPart")
+flat = me and ((root.Position - me.Position) * Vector3.new(1, 0, 1)) or Vector3.zero
+end
+if flat.Magnitude < 0.05 then flat = Vector3.new(0, 0, -1) end
+flat = flat.Unit
+buildSigil()
+buildShrine(center + flat * 90, center)
+if not opts.isSelf then buildBottles() end
+local storm = newPart(S.folder, Vector3.new(80, 1, 80), Color3.new(1, 1, 1), Enum.Material.SmoothPlastic)
 storm.Transparency = 1
-local em = Instance.new("ParticleEmitter")
-em.Texture = FIRE_TEX
-em.LightEmission = 1
-em.Rate = 140
-em.Lifetime = NumberRange.new(2.5, 4.5)
-em.Speed = NumberRange.new(10, 24)
+local em = fireEmitter(storm, 140, NumberRange.new(2.5, 4.5), NumberRange.new(10, 24), 1.1, Vector2.new(0, 0))
 em.EmissionDirection = Enum.NormalId.Top
 em.Shape = Enum.ParticleEmitterShape.Box
-em.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1.1), NumberSequenceKeypoint.new(1, 0) })
-em.Color = ColorSequence.new(Color3.fromRGB(255, 190, 80), Color3.fromRGB(200, 25, 10))
-em.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
-em.Parent = storm
 local ash = Instance.new("ParticleEmitter")
 ash.Texture = "rbxasset://textures/particles/smoke_main.dds"
 ash.Rate = 30
@@ -1772,41 +1804,132 @@ ash.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 6), NumberSequence
 ash.Color = ColorSequence.new(Color3.fromRGB(40, 5, 5))
 ash.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.7), NumberSequenceKeypoint.new(1, 1) })
 ash.Parent = storm
-local riseFrom = -60
+local pillar
+if not opts.isSelf then
+pillar = newPart(S.folder, Vector3.new(260, 3, 3), RED, Enum.Material.Neon, Enum.PartType.Cylinder)
+pillar.Transparency = 0.45
+end
+if not opts.isSelf then
+lance = newPart(S.folder, Vector3.new(70, 2.4, 2.4), Color3.fromRGB(255, 225, 190), Enum.Material.Neon, Enum.PartType.Cylinder)
+lanceGlow = newPart(S.folder, Vector3.new(74, 6, 6), Color3.fromRGB(255, 60, 20), Enum.Material.Neon, Enum.PartType.Cylinder)
+lanceGlow.Transparency = 0.6
+local tip = newPart(S.folder, Vector3.new(8, 5, 5), Color3.fromRGB(255, 255, 255), Enum.Material.Neon, Enum.PartType.Ball)
+table.insert(lanceBits, tip)
+local fe = fireEmitter(lance, 90, NumberRange.new(0.5, 1.1), NumberRange.new(3, 9), 5, Vector2.new(25, 25))
+fe.EmissionDirection = Enum.NormalId.Left
+end
+for i = 1, 8 do
+local a = i * 2 * math.pi / 8
+local p = newPart(S.folder, Vector3.new(1, 1, 1), Color3.new(1, 1, 1), Enum.Material.SmoothPlastic)
+p.Transparency = 1
+p.Position = center + Vector3.new(math.cos(a) * 16, 0.5, math.sin(a) * 16)
+local fe = fireEmitter(p, 70, NumberRange.new(0.8, 1.4), NumberRange.new(18, 30), 5, Vector2.new(5, 5))
+fe.EmissionDirection = Enum.NormalId.Top
+table.insert(shrine, { part = p, fixed = true, rel = Vector3.new(math.cos(a) * 16, 0.5, math.sin(a) * 16) })
+end
+local near = true
+if not opts.isSelf then
+local me = char() and char():FindFirstChild("HumanoidRootPart")
+near = me and (me.Position - root.Position).Magnitude < 130
+end
+if near then S.usesSky = true skyOn() end
+if opts.isSelf then
+screenShow(S, true)
+shake(1.1, 0.6)
+end
+for i = 0, 2 do
+task.delay(i * 0.18, function()
+if not S.on then return end
+pcall(function()
+local ring = newPart(S.folder, Vector3.new(0.5, 4, 4), i == 1 and WHITE or RED, Enum.Material.Neon, Enum.PartType.Cylinder)
+ring.CFrame = CFrame.new(center + Vector3.new(0, 0.3, 0)) * CFrame.Angles(0, 0, math.pi / 2)
+TweenService:Create(ring, TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = Vector3.new(0.4, 150, 150), Transparency = 1 }):Play()
+Debris:AddItem(ring, 1.1)
+end)
+end)
+end
 local lastBolt = 0
-table.insert(megaConns, RunService.RenderStepped:Connect(function(dt)
-if not megaOn then return end
-local r = char() and char():FindFirstChild("HumanoidRootPart")
+table.insert(S.conns, RunService.RenderStepped:Connect(function()
+if not S.on then return end
+local r = opts.getRoot()
+if not r or not r.Parent then S.stop(true) return end
 local now = os.clock()
-local age = now - megaT0
+local age = now - t0
 local alpha = math.clamp(age / 0.6, 0, 1)
+center = Vector3.new(r.Position.X, center.Y, r.Position.Z)
 local spin = age * 0.8
-for _, rec in ipairs(sigilParts) do
-rec.part.CFrame = CFrame.new(sigilCenter) * CFrame.Angles(0, spin * rec.spin, 0) * rec.off
-rec.part.Transparency = rec.fixedT and (1 - (1 - rec.fixedT) * alpha) or (1 - 0.7 * alpha)
+local cf0 = CFrame.new(center)
+for _, rec in ipairs(sigil) do
+rec.part.CFrame = cf0 * CFrame.Angles(0, spin * rec.spin, 0) * rec.off
+rec.part.Transparency = 1 - 0.7 * alpha
 end
 local rise = math.clamp(age / 1.0, 0, 1)
 local e = 1 + 2.2 * (rise - 1) ^ 3 + 1.2 * (rise - 1) ^ 2
-local lift = riseFrom * (1 - e)
-for _, rec in ipairs(shrineParts) do
-local tr = rec.part:FindFirstChildOfClass("ParticleEmitter") and 1 or math.clamp(1 - rise * 1.1, 0, 1) * 0.9
-rec.part.CFrame = shrineFrame * CFrame.new(0, lift, 0) * rec.off
-if not rec.part:FindFirstChildOfClass("ParticleEmitter") then rec.part.Transparency = tr end
+local lift = -60 * (1 - e)
+for _, rec in ipairs(shrine) do
+if rec.fixed then
+rec.part.Position = center + rec.rel
+else
+rec.part.CFrame = frameCF * CFrame.new(0, lift, 0) * rec.off
+if not rec.fire then rec.part.Transparency = math.clamp(1 - rise * 1.1, 0, 1) * 0.9 end
 end
-if r then
+end
 storm.CFrame = CFrame.new(r.Position - Vector3.new(0, 6, 0))
-sigilCenter = Vector3.new(r.Position.X, sigilCenter.Y, r.Position.Z)
+if pillar then
+pillar.CFrame = CFrame.new(r.Position + Vector3.new(0, 110, 0)) * CFrame.Angles(0, 0, math.pi / 2)
+pillar.Transparency = 0.4 + math.sin(now * 14) * 0.12
+end
+if lance then
+local look = r.CFrame.LookVector
+local cf
+if launchT then
+local travel = (now - launchT) * 650
+local pos = launchFrom + launchDir * travel
+cf = CFrame.lookAt(pos, pos + launchDir) * CFrame.Angles(0, math.rad(90), 0)
+if travel > 300 and not S.boomed then
+S.boomed = true
+bigBoom(pos)
+lance.Transparency, lanceGlow.Transparency = 1, 1
+for _, b in ipairs(lanceBits) do b.Transparency = 1 end
+local em = lance:FindFirstChildOfClass("ParticleEmitter")
+if em then em.Enabled = false end
+end
+else
+local pos = r.Position + Vector3.new(0, 13 + math.sin(now * 3) * 0.6, 0) + look * 6
+local grow = math.clamp(age / 0.8, 0, 1)
+cf = CFrame.lookAt(pos, pos + look) * CFrame.Angles(0, math.rad(90), 0)
+lance.Size = Vector3.new(70 * grow, 2.4, 2.4) * (1 + math.sin(now * 12) * 0.03)
+lanceGlow.Size = Vector3.new(74 * grow, 6 + math.sin(now * 9) * 1.2, 6 + math.sin(now * 9) * 1.2)
+end
+lance.CFrame = cf
+lanceGlow.CFrame = cf
+for _, b in ipairs(lanceBits) do b.CFrame = cf * CFrame.new(lance.Size.X / 2 + 1, 0, 0) end
+end
+local n = #bottles
+for _, b in ipairs(bottles) do
+local k = (b.i - 1) % 3
+local m = math.max(1, math.ceil((n - k) / 3))
+local j = (b.i - 1 - k) // 3
+local R = 5.8 * math.clamp(age / 0.7, 0, 1)
+local ang = spin * 1.6 * (k % 2 == 0 and 1.3 or -1.3) + j * 2 * math.pi / m
+local tilt = k == 0 and CFrame.new() or (k == 1 and CFrame.Angles(math.rad(62), 0, 0) or CFrame.Angles(0, 0, math.rad(62)))
+local rot = CFrame.Angles(0, spin * 0.6, 0) * tilt
+local off = rot:VectorToWorldSpace(Vector3.new(math.cos(ang), 0, math.sin(ang))) * R
+local pos = r.Position + Vector3.new(0, 4.5, 0) + off
+local face = CFrame.lookAt(pos, pos + off) * CFrame.Angles(math.rad(-90), 0, 0)
+b.body.CFrame = face * CFrame.Angles(0, 0, math.pi / 2)
+b.cap.CFrame = face * CFrame.new(0, 1.55, 0) * CFrame.Angles(0, 0, math.pi / 2)
+end
 if now - lastBolt > 0.16 then
 lastBolt = now
 for _ = 1, 2 do
 local a = math.random() * 2 * math.pi
 local d = 14 + math.random() * 55
 local top = r.Position + Vector3.new(math.cos(a) * d, 85, math.sin(a) * d)
-local bot = Vector3.new(top.X, sigilCenter.Y, top.Z)
-bolt(top, bot, math.random() < 0.5 and Color3.fromRGB(255, 60, 40) or Color3.fromRGB(255, 235, 225))
+bolt(S.folder, top, Vector3.new(top.X, center.Y, top.Z), math.random() < 0.5 and Color3.fromRGB(255, 60, 40) or WHITE)
 end
 end
-end
+if opts.isSelf then
 local hum = char() and char():FindFirstChildOfClass("Humanoid")
 if hum then
 if now < shakeUntil then
@@ -1817,46 +1940,132 @@ shakeMag = 0
 if hum.CameraOffset ~= Vector3.zero then hum.CameraOffset = Vector3.zero end
 end
 end
+end
+end))
+if not opts.isSelf then
+playSound(S_BASS, 0.7, 0.8)
+playSound(S_WHOOSH, 0.4, 0.6)
+end
+end
+function S.flash()
+if not S.on then return end
+local root = opts.getRoot()
+if lance and not launchT then
+launchT = os.clock()
+launchFrom = lance.Position
+launchDir = root and root.CFrame.LookVector or Vector3.new(0, 0, -1)
+playSound(S_LAUNCH, 0.9, 0.8)
+end
+local me = char() and char():FindFirstChild("HumanoidRootPart")
+if root and me and (me.Position - root.Position).Magnitude < 160 then
+screenShow(S, false)
+shake(0.9, 0.35)
+end
+playSound(S_THUNDER, 0.7, 1.1)
+playSound(S_BOOM, 0.8, 0.7)
+end
+function S.stop(instant)
+if not S.on and not S.folder and not S.gui then return end
+S.on = false
+if S.usesSky then S.usesSky = false skyOff(instant) end
+for _, cn in ipairs(S.conns) do pcall(function() cn:Disconnect() end) end
+table.clear(S.conns)
+if opts.isSelf then
+local hum = char() and char():FindFirstChildOfClass("Humanoid")
+if hum then pcall(function() hum.CameraOffset = Vector3.zero end) end
+shakeUntil, shakeMag = 0, 0
+end
+local folder, gui = S.folder, S.gui
+S.folder, S.gui = nil, nil
+if instant then
+if folder then pcall(function() folder:Destroy() end) end
+if gui then pcall(function() gui:Destroy() end) end
+else
+if folder then
+for _, d in ipairs(folder:GetChildren()) do
+if d:IsA("BasePart") then pcall(function() TweenService:Create(d, TweenInfo.new(0.8, Enum.EasingStyle.Quad), { Transparency = 1 }):Play() end) end
+end
+for _, d in ipairs(folder:GetDescendants()) do
+if d:IsA("ParticleEmitter") then d.Enabled = false end
+end
+task.delay(1.2, function() pcall(function() folder:Destroy() end) end)
+end
+if gui then task.delay(1.5, function() pcall(function() gui:Destroy() end) end) end
+end
+table.clear(sigil)
+table.clear(shrine)
+table.clear(bottles)
+end
+return S
+end
+local function megaStart()
+if not CFG.mega then return end
+if selfShow then selfShow.stop(true) end
+selfShow = newShow({ isSelf = true, getRoot = function() local c = char() return c and c:FindFirstChild("HumanoidRootPart") end })
+selfShow.start()
+end
+local function megaStop(instant)
+if selfShow then
+local s = selfShow
+selfShow = nil
+s.stop(instant)
+end
+end
+local function megaKick() -- one small shake per Molotov thrown
+if selfShow then shake(0.35, 0.18) end
+end
+local function megaStopAll()
+megaStop(true)
+for p, s in pairs(remoteShows) do pcall(function() s.stop(true) end) remoteShows[p] = nil end
+end
+local lastCue = {}
+local function remoteCue(p, msg)
+if not CFG.watch or p == lp then return end
+local m = tostring(msg):lower():gsub("%s", "")
+local key = p.UserId .. m
+if lastCue[key] and os.clock() - lastCue[key] < 0.5 then return end -- both chat systems can report the same line
+lastCue[key] = os.clock()
+if m == "kai." then
+local old = remoteShows[p]
+if old then old.stop(true) end
+local count = 0
+for _ in pairs(remoteShows) do count += 1 end
+if count >= 2 then return end
+local c = p.Character
+local root = c and c:FindFirstChild("HumanoidRootPart")
+local me = char() and char():FindFirstChild("HumanoidRootPart")
+if not root or not me or (me.Position - root.Position).Magnitude > 300 then return end
+local show = newShow({ isSelf = false, getRoot = function() local ch = p.Character return ch and ch:FindFirstChild("HumanoidRootPart") end })
+remoteShows[p] = show
+show.start()
+task.delay(9, function() if remoteShows[p] == show then remoteShows[p] = nil show.stop(false) end end)
+elseif m == "fuga." then
+local show = remoteShows[p]
+if show then
+show.flash()
+remoteShows[p] = nil
+task.delay(2.2, function() show.stop(false) end)
+end
+end
+end
+local function watchPlayer(p)
+if p == lp then return end
+table.insert(conns, p.Chatted:Connect(function(msg) remoteCue(p, msg) end))
+end
+for _, p in ipairs(Players:GetPlayers()) do watchPlayer(p) end
+table.insert(conns, Players.PlayerAdded:Connect(watchPlayer))
+pcall(function()
+local TCS = game:GetService("TextChatService")
+table.insert(conns, TCS.MessageReceived:Connect(function(m)
+local src = m.TextSource
+local pl = src and Players:GetPlayerByUserId(src.UserId)
+if pl then remoteCue(pl, m.Text) end
 end))
 end)
-skyOn()
-overlayFx()
-shake(1.1, 0.6)
-pcall(function()
-for i = 1, 8 do
-local a = i * 2 * math.pi / 8
-local p = newPart(Vector3.new(1, 1, 1), Color3.new(1, 1, 1), Enum.Material.SmoothPlastic)
-p.Transparency = 1
-p.Position = sigilCenter + Vector3.new(math.cos(a) * 16, 0.5, math.sin(a) * 16)
-local e = Instance.new("ParticleEmitter")
-e.Texture = FIRE_TEX
-e.LightEmission = 1
-e.Rate = 70
-e.Lifetime = NumberRange.new(0.8, 1.4)
-e.Speed = NumberRange.new(18, 30)
-e.EmissionDirection = Enum.NormalId.Top
-e.SpreadAngle = Vector2.new(5, 5)
-e.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 5), NumberSequenceKeypoint.new(1, 0) })
-e.Color = ColorSequence.new(Color3.fromRGB(255, 230, 150), Color3.fromRGB(215, 30, 10))
-e.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
-e.Parent = p
-end
-end)
-for i = 0, 2 do
-task.delay(i * 0.18, function()
-if not megaOn then return end
-pcall(function()
-local r = char() and char():FindFirstChild("HumanoidRootPart")
-if not r then return end
-local ring = newPart(Vector3.new(0.5, 4, 4), i == 1 and Color3.fromRGB(255, 240, 220) or Color3.fromRGB(255, 40, 20), Enum.Material.Neon, Enum.PartType.Cylinder)
-ring.CFrame = CFrame.new(sigilCenter + Vector3.new(0, 0.3, 0)) * CFrame.Angles(0, 0, math.pi / 2)
-local tw = TweenService:Create(ring, TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = Vector3.new(0.4, 150, 150), Transparency = 1 })
-tw:Play()
-Debris:AddItem(ring, 1.1)
-end)
-end)
-end
-end
+table.insert(conns, Players.PlayerRemoving:Connect(function(p)
+local s = remoteShows[p]
+if s then remoteShows[p] = nil s.stop(true) end
+end))
 cineCleanup = function() cineOff(true) megaStop(true) end
 local function sayChat(text)
 pcall(function()
@@ -1898,7 +2107,8 @@ playVoice()
 if CFG.mega then pcall(megaStart) end
 if CFG.chat and os.clock() - lastChat > 6 then
 lastChat = os.clock()
-task.spawn(function() sayChat("Kai.") task.wait(0.9) sayChat("FUGA.") end)
+cueSent = true
+sayChat("Kai.")
 end
 playSound(S_BASS, 1.5, 0.55)
 playSound(S_BOOM, 0.9, 0.7)
@@ -1908,6 +2118,11 @@ playImpact()
 cineOn()
 end
 local function releaseEffects()
+if cueSent then
+cueSent = false
+local wait = math.max(0, 1.2 - (os.clock() - lastChat))
+task.delay(wait, function() sayChat("FUGA.") end)
+end
 pcall(megaStop, false)
 if CFG.mega then shake(2.2, 0.5) end
 playSound(S_LAUNCH, 0.9, 0.8)
@@ -1982,16 +2197,52 @@ releaseAll()
 toast("Fuga ring OFF")
 end
 end
+local pathParams = RaycastParams.new()
+pathParams.FilterType = Enum.RaycastFilterType.Exclude
+local function checkAim(target)
+local c = char()
+local root = c and c:FindFirstChild("HumanoidRootPart")
+if not root then return false, "no character" end
+local d = (target - root.Position).Magnitude
+if d < CFG.safeDistance then return false, "close" end
+local start = root.Position + Vector3.new(0, 1.5, 0)
+local dir = target - start
+local len = math.min(dir.Magnitude, CFG.safeDistance + 15)
+if dir.Magnitude < 1 then return false, "close" end
+dir = dir.Unit
+local ignore = { c }
+for _ = 1, 6 do
+pathParams.FilterDescendantsInstances = ignore
+local hit
+local ok = pcall(function() hit = workspace:Spherecast(start, 1.6, dir * len, pathParams) end)
+if not ok then hit = workspace:Raycast(start, dir * len, pathParams) end
+if not hit then return true end
+local part = hit.Instance
+if part.CanCollide == false and part.Transparency >= 0.95 then
+table.insert(ignore, part)
+else
+local hd = (hit.Position - root.Position).Magnitude
+if hd < CFG.safeDistance then return false, "blocked", hd end
+return true
+end
+end
+return true
+end
 local function aimIsSafe()
 local c = char()
 local root = c and c:FindFirstChild("HumanoidRootPart")
 if not root then return false end
-local ok, d = pcall(function() return (mouse.Hit.Position - root.Position).Magnitude end)
-if not ok then return true end
-if d >= CFG.safeDistance then return true end
+local okHit, target = pcall(function() return mouse.Hit.Position end)
+if not okHit then return true end
+local safe, why, hd = checkAim(target)
+if safe then return true end
 if os.clock() - lastWarn > 1.5 then
 lastWarn = os.clock()
+if why == "blocked" then
+toast(string.format("Something is in the way %d studs from you. The Molotov would burst there and burn you", math.floor(hd or 0)))
+else
 toast("Aim farther away. That spot is too close and would burn you")
+end
 end
 return false
 end
@@ -2208,6 +2459,8 @@ updateFx(root, charge)
 end))
 getgenv().FugaRing = {
 cfg = CFG,
+checkAim = function(t) return checkAim(t) end, -- (Vector3) -> safe, reason, distance (for testing)
+cue = remoteCue, -- (player, "Kai." or "FUGA.") shows the effects around another player, for testing
 set = setOn,
 isOn = function() return on end,
 release = function() task.spawn(volley) end,
@@ -2231,6 +2484,7 @@ on = false
 for _, c in ipairs(conns) do c:Disconnect() end
 table.clear(conns)
 releaseAll()
+megaStopAll()
 getgenv().FugaRing = nil
 end,
 }
@@ -3308,7 +3562,10 @@ autoLand = true,
 landAt = 4.2,        -- be on the ground by this many seconds of air time (the game's limit is 5.0)
 descentSpeed = 50,   -- studs per second while coming down
 jumpPower = 44,      -- upward speed of each extra jump
+boost = true,        -- jump higher from the ground too
+groundPower = 95,    -- the Humanoid jump power used while "boost" is on (the game's normal value is usually 50)
 }
+local origJump = nil -- { UseJumpPower, JumpPower, JumpHeight } as the game had them
 local conns = {}
 local airTime, bestAir, forceLand, lastBoost = 0, 0, false, 0
 local groundParams = RaycastParams.new()
@@ -3347,6 +3604,18 @@ if now - lastBoost < 0.15 then return end
 lastBoost = now
 local v = root.AssemblyLinearVelocity
 root.AssemblyLinearVelocity = Vector3.new(v.X, CFG.jumpPower, v.Z)
+end))
+table.insert(conns, RunService.Heartbeat:Connect(function()
+local hum = humanoid()
+if not hum then return end
+if CFG.boost then
+if not origJump then origJump = { hum.UseJumpPower, hum.JumpPower, hum.JumpHeight } end
+if not hum.UseJumpPower then hum.UseJumpPower = true end
+if hum.JumpPower ~= CFG.groundPower then hum.JumpPower = CFG.groundPower end
+elseif origJump then
+hum.UseJumpPower, hum.JumpPower, hum.JumpHeight = origJump[1], origJump[2], origJump[3]
+origJump = nil
+end
 end))
 local lastAirText, lastAirColor = "", nil
 table.insert(conns, RunService.Heartbeat:Connect(function(dt)
@@ -3428,6 +3697,8 @@ cfg = CFG,
 resetBest = function() bestAir = 0 end,
 stop = function()
 for _, c in ipairs(conns) do c:Disconnect() end
+local hum = humanoid()
+if hum and origJump then pcall(function() hum.UseJumpPower, hum.JumpPower, hum.JumpHeight = origJump[1], origJump[2], origJump[3] end) end
 airLabel:Destroy()
 getgenv().BabylonJump = nil
 end,
@@ -4178,7 +4449,8 @@ local f = api("FugaRing")
 if f then toast("Formation: " .. f.nextFormation()) end
 end)
 addToggle(fuga, "Arm pose while spraying (others see it)", function() local f = api("FugaRing") return f and f.cfg.pose end, function(v) local f = api("FugaRing") if f then f.cfg.pose = v end end)
-addToggle(fuga, "Say Kai. / FUGA. in chat (everyone sees it)", function() local f = api("FugaRing") return f and f.cfg.chat end, function(v) local f = api("FugaRing") if f then f.cfg.chat = v end end)
+addToggle(fuga, "See other players' Fuga show (needs their chat lines)", function() local f = api("FugaRing") return f and f.cfg.watch end, function(v) local f = api("FugaRing") if f then f.cfg.watch = v end end)
+addToggle(fuga, "Say Kai. / FUGA. in chat (lets script users see your show)", function() local f = api("FugaRing") return f and f.cfg.chat end, function(v) local f = api("FugaRing") if f then f.cfg.chat = v end end)
 addButton(fuga, "Preview the look (throws nothing)", function() local f = api("FugaRing") if f then f.preview() end end)
 addSlider(fuga, "Safe distance (studs)", 10, 80, 1, function() local f = api("FugaRing") return f and f.cfg.safeDistance or 25 end, function(v) local f = api("FugaRing") if f then f.cfg.safeDistance = v end end)
 addSlider(fuga, "Ring height", 3, 14, 0.5, function() local f = api("FugaRing") return f and f.cfg.height or 9 end, function(v) local f = api("FugaRing") if f then f.cfg.height = v end end)
@@ -4238,6 +4510,9 @@ lbl.Text = "Above 28 you slow to 28 while shooting. The server pulls you back ab
 end
 end)
 end
+addToggle(move, "Higher jump (from the ground)", function() local j = api("BabylonJump") return j and j.cfg.boost end, function(v) local j = api("BabylonJump") if j then j.cfg.boost = v end end)
+addSlider(move, "Jump power (game default is about 50)", 50, 300, 5, function() local j = api("BabylonJump") return j and j.cfg.groundPower or 95 end, function(v) local j = api("BabylonJump") if j then j.cfg.groundPower = v end end)
+addSlider(move, "Air jump power (infinite jump)", 30, 200, 2, function() local j = api("BabylonJump") return j and j.cfg.jumpPower or 44 end, function(v) local j = api("BabylonJump") if j then j.cfg.jumpPower = v end end)
 addToggle(move, "Infinite jump", function() local j = api("BabylonJump") return j and j.cfg.infinite end, function(v) local j = api("BabylonJump") if j then j.cfg.infinite = v end end)
 addKeybind(move, "Infinite jump key", function() local j = api("BabylonJump") return j and j.cfg.key or Enum.KeyCode.J end, function(k) local j = api("BabylonJump") if j then j.cfg.key = k end end)
 addToggle(move, "Soft landing (fall damage)", function() local j = api("BabylonJump") return j and j.cfg.softLanding end, function(v) local j = api("BabylonJump") if j then j.cfg.softLanding = v end end)
