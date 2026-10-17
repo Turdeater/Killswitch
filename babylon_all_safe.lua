@@ -920,11 +920,13 @@ tilt = 40,           -- degrees the bottles lean outwards
 bob = 0.25,
 arrow = true,        -- the big flame arrow that forms while you spray (visual only)
 impact = true,       -- one very short black/white "impact frame" flash when you start spraying (visual only)
+mega = true,         -- shrine gate, sigil, lightning, ember storm, red sky, slashes and a giant kanji while you spray (visual only)
+voiceFile = "fuga_voice", -- put your own fuga_voice.mp3 (or .ogg / .wav) in the executor's workspace folder and it plays when you start spraying
 cinematic = true,    -- black bars, dark red tint and the typed chant while you spray (visual only)
 sound = true,        -- sound effects while you spray (the game's built-in sounds)
 formation = "gyro",  -- how the Molotovs float while idle (other players see this): ring, gyro, wings, halo
 pose = true,         -- raise your arms in a hand-sign pose while you spray (other players see this)
-detach = true,       -- cut the bottles (and your arms in the pose) loose from the welds and place them directly, so other players see them where you do
+detach = false,      -- EXPERIMENT, KEEP OFF: placing the bottles directly made the server delete them after about 2.4 seconds
 chat = false,        -- say "Kai." and "FUGA." in the game chat when you start spraying (everyone sees it)
 safeDistance = 25,   -- studs: a throw is held back if your cursor is pointing closer than this to you (it would burn you)
 voiceId = "",        -- optional: your own Roblox audio id (for example "rbxassetid://123456") played when the ring fires
@@ -1443,7 +1445,419 @@ end
 end)
 end)
 end
-cineCleanup = function() cineOff(true) end
+local Lighting = game:GetService("Lighting")
+local megaOn = false
+local megaFolder, megaGui = nil, nil
+local megaConns = {}
+local skyOrig, bloomFx = nil, nil
+local shakeUntil, shakeMag = 0, 0
+local megaT0 = 0
+local sigilParts, shrineParts, sigilCenter, shrineFrame = {}, {}, Vector3.zero, CFrame.new()
+local function newPart(size, color, material, shape)
+local p = Instance.new("Part")
+p.Anchored = true
+p.CanCollide = false
+p.CanQuery = false
+p.CanTouch = false
+p.CastShadow = false
+p.Size = size
+p.Color = color
+p.Material = material or Enum.Material.Neon
+if shape then p.Shape = shape end
+p.Parent = megaFolder
+return p
+end
+local function groundY(root)
+local y = root.Position.Y - 2.9
+pcall(function()
+local rp = RaycastParams.new()
+rp.FilterType = Enum.RaycastFilterType.Exclude
+rp.FilterDescendantsInstances = { char() }
+local hit = workspace:Raycast(root.Position, Vector3.new(0, -14, 0), rp)
+if hit then y = hit.Position.Y + 0.15 end
+end)
+return y
+end
+local function shake(mag, dur)
+shakeMag = math.max(shakeMag, mag)
+shakeUntil = math.max(shakeUntil, os.clock() + dur)
+end
+local function megaKick() -- one small shake per Molotov thrown
+if megaOn then shake(0.35, 0.18) end
+end
+local function buildSigil(c)
+local red, white = Color3.fromRGB(255, 40, 20), Color3.fromRGB(255, 235, 215)
+local function polygon(sides, radius, rot, color, dir, thick)
+for i = 1, sides do
+local a1 = rot + (i - 1) * 2 * math.pi / sides
+local a2 = rot + i * 2 * math.pi / sides
+local v1 = Vector3.new(math.cos(a1), 0, math.sin(a1)) * radius
+local v2 = Vector3.new(math.cos(a2), 0, math.sin(a2)) * radius
+local mid = (v1 + v2) / 2
+local len = (v2 - v1).Magnitude
+local p = newPart(Vector3.new(thick or 0.5, 0.3, len + (thick or 0.5) * 0.8), color)
+table.insert(sigilParts, { part = p, off = CFrame.lookAt(mid + Vector3.new(0, 0.1, 0), mid + (v2 - v1) + Vector3.new(0, 0.1, 0)), spin = dir })
+end
+end
+polygon(36, 15, 0, red, 1, 0.7)
+polygon(30, 12.4, 0, white, 1, 0.4)
+polygon(20, 5.5, 0, red, 1, 0.5)
+polygon(4, 11.2, math.pi / 4, red, 1)
+polygon(4, 11.2, 0, red, 1)
+polygon(3, 7, 0, white, -1.6)
+polygon(3, 7, math.pi, white, -1.6)
+for i = 1, 16 do
+local a = i * 2 * math.pi / 16
+local dir = Vector3.new(math.cos(a), 0, math.sin(a))
+local p = newPart(Vector3.new(0.45, 0.3, 2.4), i % 2 == 0 and red or white)
+table.insert(sigilParts, { part = p, off = CFrame.lookAt(dir * 13.7 + Vector3.new(0, 0.1, 0), dir * 20 + Vector3.new(0, 0.1, 0)), spin = 1 })
+end
+sigilCenter = c
+end
+local function buildShrine(rootPos, lookFlat, y)
+local K = 0.8
+local dark = Color3.fromRGB(24, 12, 12)
+local red = Color3.fromRGB(255, 35, 20)
+local pos = Vector3.new(rootPos.X, y, rootPos.Z) + lookFlat * 90
+shrineFrame = CFrame.lookAt(pos, Vector3.new(rootPos.X, y, rootPos.Z))
+local function add(size, off, color, material, shape, fire)
+local p = newPart(size * K, color, material, shape)
+local rec = { part = p, off = CFrame.new(off.Position * K) * (off - off.Position) }
+table.insert(shrineParts, rec)
+if fire then
+local e = Instance.new("ParticleEmitter")
+e.Texture = FIRE_TEX
+e.LightEmission = 1
+e.Rate = 18
+e.Lifetime = NumberRange.new(0.8, 1.6)
+e.Speed = NumberRange.new(6, 12)
+e.SpreadAngle = Vector2.new(20, 20)
+e.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 7), NumberSequenceKeypoint.new(1, 0) })
+e.Color = ColorSequence.new(Color3.fromRGB(255, 200, 90), Color3.fromRGB(210, 30, 10))
+e.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.2), NumberSequenceKeypoint.new(1, 1) })
+e.Parent = p
+end
+return p
+end
+local cyl = Enum.PartType.Cylinder
+for _, sx in ipairs({ -20, 20 }) do
+add(Vector3.new(36, 4.2, 4.2), CFrame.new(sx, 18, 0) * CFrame.Angles(0, 0, math.pi / 2), dark, Enum.Material.Slate, cyl)
+for _, yy in ipairs({ 3, 11, 19 }) do
+add(Vector3.new(0.7, 4.9, 4.9), CFrame.new(sx, yy, 0) * CFrame.Angles(0, 0, math.pi / 2), red, Enum.Material.Neon, cyl)
+end
+end
+add(Vector3.new(56, 2, 2.4), CFrame.new(0, 24, 0), dark, Enum.Material.Slate)
+add(Vector3.new(56, 0.35, 2.7), CFrame.new(0, 25.1, 0), red)
+add(Vector3.new(66, 3, 3.2), CFrame.new(0, 31, 0), dark, Enum.Material.Slate)
+add(Vector3.new(66, 0.4, 3.5), CFrame.new(0, 32.7, 0), red)
+add(Vector3.new(86, 3, 10), CFrame.new(0, 35, 0), dark, Enum.Material.Slate)
+add(Vector3.new(86, 0.45, 10.4), CFrame.new(0, 33.4, 0), red)
+add(Vector3.new(15, 3, 10), CFrame.new(-44, 36.8, 0) * CFrame.Angles(0, 0, math.rad(20)), dark, Enum.Material.Slate)
+add(Vector3.new(15, 3, 10), CFrame.new(44, 36.8, 0) * CFrame.Angles(0, 0, math.rad(-20)), dark, Enum.Material.Slate)
+add(Vector3.new(60, 3, 7), CFrame.new(0, 38.6, 0), dark, Enum.Material.Slate)
+add(Vector3.new(60, 0.4, 7.4), CFrame.new(0, 40.2, 0), red)
+local eye = add(Vector3.new(6, 6, 6), CFrame.new(0, 28, 0), red, Enum.Material.Neon, Enum.PartType.Ball)
+local light = Instance.new("PointLight")
+light.Color = Color3.fromRGB(255, 60, 30)
+light.Range = 70
+light.Brightness = 4
+light.Parent = eye
+add(Vector3.new(1.4, 6, 6.2), CFrame.new(0, 28, 0), Color3.fromRGB(255, 240, 220), Enum.Material.Neon, Enum.PartType.Ball)
+for _, fx in ipairs({ -36, -18, 0, 18, 36 }) do
+add(Vector3.new(1, 1, 1), CFrame.new(fx, 41, 0), red, Enum.Material.Neon, nil, true).Transparency = 1
+end
+end
+local function skyOn()
+if skyOrig then return end
+skyOrig = {
+Ambient = Lighting.Ambient, OutdoorAmbient = Lighting.OutdoorAmbient, Brightness = Lighting.Brightness,
+FogColor = Lighting.FogColor, FogEnd = Lighting.FogEnd, FogStart = Lighting.FogStart,
+ExposureCompensation = Lighting.ExposureCompensation,
+}
+TweenService:Create(Lighting, TweenInfo.new(0.7, Enum.EasingStyle.Quad), {
+Ambient = Color3.fromRGB(110, 14, 10), OutdoorAmbient = Color3.fromRGB(120, 18, 12),
+FogColor = Color3.fromRGB(70, 0, 0), FogStart = 60, FogEnd = 520, ExposureCompensation = -0.5,
+}):Play()
+pcall(function()
+bloomFx = Instance.new("BloomEffect")
+bloomFx.Name = "FugaBloom"
+bloomFx.Intensity = 0
+bloomFx.Size = 24
+bloomFx.Threshold = 1.0
+bloomFx.Parent = Lighting
+TweenService:Create(bloomFx, TweenInfo.new(0.5), { Intensity = 0.7 }):Play()
+end)
+end
+local function skyOff(instant)
+local o = skyOrig
+skyOrig = nil
+if bloomFx then
+local b = bloomFx
+bloomFx = nil
+if instant then pcall(function() b:Destroy() end)
+else
+TweenService:Create(b, TweenInfo.new(0.7), { Intensity = 0 }):Play()
+task.delay(0.8, function() pcall(function() b:Destroy() end) end)
+end
+end
+if o then
+if instant then
+for k, v in pairs(o) do pcall(function() Lighting[k] = v end) end
+else
+TweenService:Create(Lighting, TweenInfo.new(0.9, Enum.EasingStyle.Quad), o):Play()
+end
+end
+end
+local function bolt(from, to, color)
+local segs, prev = 9, from
+for i = 1, segs do
+local t = i / segs
+local p = from:Lerp(to, t)
+if i < segs then p += Vector3.new((math.random() - 0.5) * 9, 0, (math.random() - 0.5) * 9) end
+local len = (p - prev).Magnitude
+if len > 0.1 then
+local seg = newPart(Vector3.new(0.45, 0.45, len), color)
+seg.CFrame = CFrame.lookAt((prev + p) / 2, p)
+Debris:AddItem(seg, 0.14)
+end
+prev = p
+end
+end
+local function overlayFx()
+pcall(function()
+megaGui = Instance.new("ScreenGui")
+megaGui.Name = "FugaMegaGui"
+megaGui.IgnoreGuiInset = true
+megaGui.ResetOnSpawn = false
+megaGui.DisplayOrder = 40
+megaGui.Parent = lp:WaitForChild("PlayerGui")
+local gui = megaGui
+task.spawn(function()
+for i = 1, 8 do
+if megaGui ~= gui then return end
+pcall(function()
+local cam = workspace.CurrentCamera
+local vp = cam and cam.ViewportSize or Vector2.new(1920, 1080)
+local ang = math.random(-35, 35) + (i % 2 == 0 and 180 or 0)
+local glow = Instance.new("Frame")
+glow.AnchorPoint = Vector2.new(0.5, 0.5)
+glow.Position = UDim2.fromOffset(vp.X * (0.2 + math.random() * 0.6), vp.Y * (0.2 + math.random() * 0.6))
+glow.Size = UDim2.fromOffset(0, 16)
+glow.Rotation = ang
+glow.BackgroundColor3 = Color3.fromRGB(255, 30, 20)
+glow.BorderSizePixel = 0
+glow.Parent = gui
+local core = Instance.new("Frame")
+core.AnchorPoint = Vector2.new(0.5, 0.5)
+core.Position = UDim2.fromScale(0.5, 0.5)
+core.Size = UDim2.new(1, 0, 0, 4)
+core.BackgroundColor3 = Color3.new(1, 1, 1)
+core.BorderSizePixel = 0
+core.Parent = glow
+local info = TweenInfo.new(0.09, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+TweenService:Create(glow, info, { Size = UDim2.fromOffset(vp.X * 1.5, 16) }):Play()
+task.delay(0.1, function()
+TweenService:Create(glow, TweenInfo.new(0.35), { BackgroundTransparency = 1, Size = UDim2.fromOffset(vp.X * 1.5, 2) }):Play()
+TweenService:Create(core, TweenInfo.new(0.35), { BackgroundTransparency = 1 }):Play()
+end)
+Debris:AddItem(glow, 0.7)
+end)
+playSound(S_SLASH, 0.5, 0.9 + math.random() * 0.4)
+task.wait(0.05)
+end
+end)
+task.delay(0.45, function()
+if megaGui ~= gui then return end
+pcall(function()
+local lbl = Instance.new("TextLabel")
+lbl.AnchorPoint = Vector2.new(0.5, 0.5)
+lbl.Position = UDim2.fromScale(0.5, 0.4)
+lbl.Size = UDim2.fromOffset(1000, 1000)
+lbl.BackgroundTransparency = 1
+lbl.Text = "開"
+lbl.Font = Enum.Font.GothamBlack
+lbl.TextScaled = true
+lbl.TextColor3 = Color3.fromRGB(255, 245, 235)
+lbl.TextTransparency = 1
+lbl.Parent = gui
+local stroke = Instance.new("UIStroke")
+stroke.Color = Color3.fromRGB(255, 20, 10)
+stroke.Thickness = 14
+stroke.Transparency = 1
+stroke.Parent = lbl
+TweenService:Create(lbl, TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Size = UDim2.fromOffset(380, 380), TextTransparency = 0.05 }):Play()
+TweenService:Create(stroke, TweenInfo.new(0.22), { Transparency = 0 }):Play()
+shake(1.6, 0.35)
+playSound(S_BOOM, 1, 0.7)
+task.delay(1.1, function()
+TweenService:Create(lbl, TweenInfo.new(0.7), { TextTransparency = 1, Size = UDim2.fromOffset(520, 520) }):Play()
+TweenService:Create(stroke, TweenInfo.new(0.7), { Transparency = 1 }):Play()
+end)
+end)
+end)
+end)
+end
+local function megaStop(instant)
+if not megaOn and not megaFolder and not megaGui then return end
+megaOn = false
+skyOff(instant)
+local folder, gui = megaFolder, megaGui
+for _, cn in ipairs(megaConns) do pcall(function() cn:Disconnect() end) end
+table.clear(megaConns)
+local hum = char() and char():FindFirstChildOfClass("Humanoid")
+if hum then pcall(function() hum.CameraOffset = Vector3.zero end) end
+shakeUntil, shakeMag = 0, 0
+if instant then
+if folder then pcall(function() folder:Destroy() end) end
+if gui then pcall(function() gui:Destroy() end) end
+megaFolder, megaGui = nil, nil
+else
+if folder then
+local info = TweenInfo.new(0.8, Enum.EasingStyle.Quad)
+for _, d in ipairs(folder:GetChildren()) do
+if d:IsA("BasePart") then pcall(function() TweenService:Create(d, info, { Transparency = 1 }):Play() end) end
+end
+for _, d in ipairs(folder:GetDescendants()) do
+if d:IsA("ParticleEmitter") then d.Enabled = false end
+end
+task.delay(1.2, function() pcall(function() folder:Destroy() end) end)
+end
+if gui then task.delay(1.5, function() pcall(function() gui:Destroy() end) end) end
+megaFolder, megaGui = nil, nil
+end
+table.clear(sigilParts)
+table.clear(shrineParts)
+end
+local function megaStart()
+if megaOn or not CFG.mega then return end
+local c = char()
+local root = c and c:FindFirstChild("HumanoidRootPart")
+if not root then return end
+megaStop(true)
+megaOn = true
+megaT0 = os.clock()
+pcall(function()
+megaFolder = Instance.new("Folder")
+megaFolder.Name = "FugaMega"
+megaFolder.Parent = workspace
+local gy = groundY(root)
+local cam = workspace.CurrentCamera
+local look = cam and cam.CFrame.LookVector * Vector3.new(1, 0, 1) or root.CFrame.LookVector * Vector3.new(1, 0, 1)
+if look.Magnitude < 0.05 then look = Vector3.new(0, 0, -1) end
+look = look.Unit
+buildSigil(Vector3.new(root.Position.X, gy, root.Position.Z))
+buildShrine(root.Position, look, gy)
+local storm = newPart(Vector3.new(80, 1, 80), Color3.new(1, 1, 1), Enum.Material.SmoothPlastic)
+storm.Transparency = 1
+local em = Instance.new("ParticleEmitter")
+em.Texture = FIRE_TEX
+em.LightEmission = 1
+em.Rate = 140
+em.Lifetime = NumberRange.new(2.5, 4.5)
+em.Speed = NumberRange.new(10, 24)
+em.EmissionDirection = Enum.NormalId.Top
+em.Shape = Enum.ParticleEmitterShape.Box
+em.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1.1), NumberSequenceKeypoint.new(1, 0) })
+em.Color = ColorSequence.new(Color3.fromRGB(255, 190, 80), Color3.fromRGB(200, 25, 10))
+em.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
+em.Parent = storm
+local ash = Instance.new("ParticleEmitter")
+ash.Texture = "rbxasset://textures/particles/smoke_main.dds"
+ash.Rate = 30
+ash.Lifetime = NumberRange.new(3, 5)
+ash.Speed = NumberRange.new(4, 10)
+ash.EmissionDirection = Enum.NormalId.Top
+ash.Shape = Enum.ParticleEmitterShape.Box
+ash.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 6), NumberSequenceKeypoint.new(1, 12) })
+ash.Color = ColorSequence.new(Color3.fromRGB(40, 5, 5))
+ash.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.7), NumberSequenceKeypoint.new(1, 1) })
+ash.Parent = storm
+local riseFrom = -60
+local lastBolt = 0
+table.insert(megaConns, RunService.RenderStepped:Connect(function(dt)
+if not megaOn then return end
+local r = char() and char():FindFirstChild("HumanoidRootPart")
+local now = os.clock()
+local age = now - megaT0
+local alpha = math.clamp(age / 0.6, 0, 1)
+local spin = age * 0.8
+for _, rec in ipairs(sigilParts) do
+rec.part.CFrame = CFrame.new(sigilCenter) * CFrame.Angles(0, spin * rec.spin, 0) * rec.off
+rec.part.Transparency = rec.fixedT and (1 - (1 - rec.fixedT) * alpha) or (1 - 0.7 * alpha)
+end
+local rise = math.clamp(age / 1.0, 0, 1)
+local e = 1 + 2.2 * (rise - 1) ^ 3 + 1.2 * (rise - 1) ^ 2
+local lift = riseFrom * (1 - e)
+for _, rec in ipairs(shrineParts) do
+local tr = rec.part:FindFirstChildOfClass("ParticleEmitter") and 1 or math.clamp(1 - rise * 1.1, 0, 1) * 0.9
+rec.part.CFrame = shrineFrame * CFrame.new(0, lift, 0) * rec.off
+if not rec.part:FindFirstChildOfClass("ParticleEmitter") then rec.part.Transparency = tr end
+end
+if r then
+storm.CFrame = CFrame.new(r.Position - Vector3.new(0, 6, 0))
+sigilCenter = Vector3.new(r.Position.X, sigilCenter.Y, r.Position.Z)
+if now - lastBolt > 0.16 then
+lastBolt = now
+for _ = 1, 2 do
+local a = math.random() * 2 * math.pi
+local d = 14 + math.random() * 55
+local top = r.Position + Vector3.new(math.cos(a) * d, 85, math.sin(a) * d)
+local bot = Vector3.new(top.X, sigilCenter.Y, top.Z)
+bolt(top, bot, math.random() < 0.5 and Color3.fromRGB(255, 60, 40) or Color3.fromRGB(255, 235, 225))
+end
+end
+end
+local hum = char() and char():FindFirstChildOfClass("Humanoid")
+if hum then
+if now < shakeUntil then
+local m = shakeMag * math.clamp((shakeUntil - now) / 0.5, 0.15, 1)
+hum.CameraOffset = Vector3.new((math.random() - 0.5) * m, (math.random() - 0.5) * m, 0)
+else
+shakeMag = 0
+if hum.CameraOffset ~= Vector3.zero then hum.CameraOffset = Vector3.zero end
+end
+end
+end))
+end)
+skyOn()
+overlayFx()
+shake(1.1, 0.6)
+pcall(function()
+for i = 1, 8 do
+local a = i * 2 * math.pi / 8
+local p = newPart(Vector3.new(1, 1, 1), Color3.new(1, 1, 1), Enum.Material.SmoothPlastic)
+p.Transparency = 1
+p.Position = sigilCenter + Vector3.new(math.cos(a) * 16, 0.5, math.sin(a) * 16)
+local e = Instance.new("ParticleEmitter")
+e.Texture = FIRE_TEX
+e.LightEmission = 1
+e.Rate = 70
+e.Lifetime = NumberRange.new(0.8, 1.4)
+e.Speed = NumberRange.new(18, 30)
+e.EmissionDirection = Enum.NormalId.Top
+e.SpreadAngle = Vector2.new(5, 5)
+e.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 5), NumberSequenceKeypoint.new(1, 0) })
+e.Color = ColorSequence.new(Color3.fromRGB(255, 230, 150), Color3.fromRGB(215, 30, 10))
+e.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(1, 1) })
+e.Parent = p
+end
+end)
+for i = 0, 2 do
+task.delay(i * 0.18, function()
+if not megaOn then return end
+pcall(function()
+local r = char() and char():FindFirstChild("HumanoidRootPart")
+if not r then return end
+local ring = newPart(Vector3.new(0.5, 4, 4), i == 1 and Color3.fromRGB(255, 240, 220) or Color3.fromRGB(255, 40, 20), Enum.Material.Neon, Enum.PartType.Cylinder)
+ring.CFrame = CFrame.new(sigilCenter + Vector3.new(0, 0.3, 0)) * CFrame.Angles(0, 0, math.pi / 2)
+local tw = TweenService:Create(ring, TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = Vector3.new(0.4, 150, 150), Transparency = 1 })
+tw:Play()
+Debris:AddItem(ring, 1.1)
+end)
+end)
+end
+end
+cineCleanup = function() cineOff(true) megaStop(true) end
 local function sayChat(text)
 pcall(function()
 local TCS = game:GetService("TextChatService")
@@ -1457,7 +1871,31 @@ if r then r:FireServer(text, "All") end
 end
 end)
 end
+local voiceAsset = nil
+local function playVoice()
+pcall(function()
+if not (isfile and getcustomasset) then return end
+local id = voiceAsset
+if not id then
+for _, ext in ipairs({ ".mp3", ".ogg", ".wav" }) do
+local name = CFG.voiceFile .. ext
+if isfile(name) then id = getcustomasset(name) break end
+end
+voiceAsset = id
+end
+if id then
+local snd = Instance.new("Sound")
+snd.SoundId = id
+snd.Volume = 3
+snd.Parent = SoundService
+snd:Play()
+Debris:AddItem(snd, 15)
+end
+end)
+end
 local function pressEffects()
+playVoice()
+if CFG.mega then pcall(megaStart) end
 if CFG.chat and os.clock() - lastChat > 6 then
 lastChat = os.clock()
 task.spawn(function() sayChat("Kai.") task.wait(0.9) sayChat("FUGA.") end)
@@ -1470,6 +1908,8 @@ playImpact()
 cineOn()
 end
 local function releaseEffects()
+pcall(megaStop, false)
+if CFG.mega then shake(2.2, 0.5) end
 playSound(S_LAUNCH, 0.9, 0.8)
 playSound(S_SLASH, 1, 0.5)
 playSound(S_THUNDER, 0.5, 1.1)
@@ -1603,6 +2043,7 @@ if aimIsSafe() then
 fired[nextTool] = true
 markAim(nextTool)
 pcall(function() nextTool:Activate() end)
+megaKick()
 end
 elseif #molotovsIn(char()) == 0 then
 break -- the last Molotov has been thrown
@@ -3727,6 +4168,7 @@ addToggle(fuga, "Fuga ring (Molotovs)", function() local f = api("FugaRing") ret
 addKeybind(fuga, "Toggle key", function() local f = api("FugaRing") return f and f.cfg.key or Enum.KeyCode.Z end, function(k) local f = api("FugaRing") if f then f.cfg.key = k end end)
 addSlider(fuga, "Spray speed (throws per second)", 2, 15, 1, function() local f = api("FugaRing") return f and math.floor(1 / f.cfg.sprayGap + 0.5) or 8 end, function(v) local f = api("FugaRing") if f then f.cfg.sprayGap = 1 / v end end)
 addButton(fuga, "Throw the whole ring at once", function() local f = api("FugaRing") if f then f.release() end end)
+addToggle(fuga, "MEGA effects: shrine, sigil, lightning, sky (visual)", function() local f = api("FugaRing") return f and f.cfg.mega end, function(v) local f = api("FugaRing") if f then f.cfg.mega = v end end)
 addToggle(fuga, "Flame arrow (visual)", function() local f = api("FugaRing") return f and f.cfg.arrow end, function(v) local f = api("FugaRing") if f then f.cfg.arrow = v end end)
 addToggle(fuga, "Cinematic bars, tint and chant (visual)", function() local f = api("FugaRing") return f and f.cfg.cinematic end, function(v) local f = api("FugaRing") if f then f.cfg.cinematic = v end end)
 addToggle(fuga, "Sound effects", function() local f = api("FugaRing") return f and f.cfg.sound end, function(v) local f = api("FugaRing") if f then f.cfg.sound = v end end)
@@ -3736,7 +4178,6 @@ local f = api("FugaRing")
 if f then toast("Formation: " .. f.nextFormation()) end
 end)
 addToggle(fuga, "Arm pose while spraying (others see it)", function() local f = api("FugaRing") return f and f.cfg.pose end, function(v) local f = api("FugaRing") if f then f.cfg.pose = v end end)
-addToggle(fuga, "Show bottles and arms to other players", function() local f = api("FugaRing") return f and f.cfg.detach end, function(v) local f = api("FugaRing") if f then f.cfg.detach = v end end)
 addToggle(fuga, "Say Kai. / FUGA. in chat (everyone sees it)", function() local f = api("FugaRing") return f and f.cfg.chat end, function(v) local f = api("FugaRing") if f then f.cfg.chat = v end end)
 addButton(fuga, "Preview the look (throws nothing)", function() local f = api("FugaRing") if f then f.preview() end end)
 addSlider(fuga, "Safe distance (studs)", 10, 80, 1, function() local f = api("FugaRing") return f and f.cfg.safeDistance or 25 end, function(v) local f = api("FugaRing") if f then f.cfg.safeDistance = v end end)
